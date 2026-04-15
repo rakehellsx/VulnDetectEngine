@@ -3,19 +3,42 @@
   VulnDetectEngine — DetectEngine DLL 工程文件
   目标：VS2017 / Windows x86 & x64 / Debug & Release
 
-  编译前置步骤：
-  1. 安装 Npcap (https://npcap.com/#download)
-  2. 下载 Npcap SDK，解压到 ..\third_party\npcap-sdk\
-       third_party\npcap-sdk\Include\  (pcap.h 等)
-       third_party\npcap-sdk\Lib\      (wpcap.lib / Packet.lib, 32位)
-       third_party\npcap-sdk\Lib\x64\ (wpcap.lib / Packet.lib, 64位)
-  3. [可选] PCRE2 完整正则支持：
-       下载 https://github.com/PCRE2Project/pcre2/releases
-       解压到 ..\third_party\pcre2\
-       在项目属性 -> 预处理定义中添加 VDE_USE_PCRE2
-       附加包含目录添加 $(SolutionDir)third_party\pcre2\include
-       附加库目录添加 $(SolutionDir)third_party\pcre2\lib
-       附加依赖项添加 pcre2-8-static.lib
+  ============================================================
+  编译前置步骤（必须）
+  ============================================================
+
+  1. 安装 Npcap 运行时
+       https://npcap.com/#download
+       安装时勾选 "Install Npcap in WinPcap API-compatible Mode"
+
+  2. 下载 Npcap SDK，解压到：
+       $(SolutionDir)third_party\npcap-sdk\
+       目录结构：
+         third_party\npcap-sdk\Include\   (pcap.h 等)
+         third_party\npcap-sdk\Lib\       (wpcap.lib / Packet.lib, 32位)
+         third_party\npcap-sdk\Lib\x64\  (wpcap.lib / Packet.lib, 64位)
+
+  3. 编译 nDPI（详见 docs/README.md 中 "nDPI Windows 编译" 章节）
+     编译完成后将产物放置到：
+       $(SolutionDir)third_party\ndpi\
+       目录结构：
+         third_party\ndpi\include\ndpi\   (ndpi_api.h / ndpi_typedefs.h 等)
+         third_party\ndpi\lib\x64\        (ndpi.lib, 64位)
+         third_party\ndpi\lib\Win32\      (ndpi.lib, 32位)
+         third_party\ndpi\bin\x64\        (ndpi.dll, 64位)
+         third_party\ndpi\bin\Win32\      (ndpi.dll, 32位)
+
+  4. 安装 pthreads-win32（nDPI 内部线程依赖）
+     方式一（推荐）：通过 NuGet 包管理器安装
+       工具 → NuGet 包管理器 → 管理解决方案的 NuGet 包
+       搜索并安装：pthreads.2.9.1.4
+     方式二：手动下载
+       https://github.com/GerHobbelt/pthread-win32/releases
+       解压到 $(SolutionDir)third_party\pthreads-win32\
+       目录结构：
+         third_party\pthreads-win32\include\  (pthread.h 等)
+         third_party\pthreads-win32\lib\x64\  (pthreadVC2.lib)
+         third_party\pthreads-win32\bin\x64\  (pthreadVC2.dll)
 -->
 <Project DefaultTargets="Build" ToolsVersion="15.0"
          xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
@@ -43,10 +66,15 @@
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
     <RootNamespace>DetectEngine</RootNamespace>
     <WindowsTargetPlatformVersion>10.0.17763.0</WindowsTargetPlatformVersion>
+
     <!-- Npcap SDK 根目录（可通过环境变量 NPCAP_SDK 覆盖） -->
     <NpcapSDKDir Condition="'$(NpcapSDKDir)'==''">$(SolutionDir)third_party\npcap-sdk\</NpcapSDKDir>
-    <!-- PCRE2 根目录（可选，开启完整正则支持） -->
-    <Pcre2Dir Condition="'$(Pcre2Dir)'==''">$(SolutionDir)third_party\pcre2\</Pcre2Dir>
+
+    <!-- nDPI SDK 根目录（可通过环境变量 NDPI_SDK 覆盖） -->
+    <NdpiSDKDir Condition="'$(NdpiSDKDir)'==''">$(SolutionDir)third_party\ndpi\</NdpiSDKDir>
+
+    <!-- pthreads-win32 根目录（nDPI 内部线程依赖） -->
+    <PthreadsDir Condition="'$(PthreadsDir)'==''">$(SolutionDir)third_party\pthreads-win32\</PthreadsDir>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -90,27 +118,31 @@
     <IntDir>$(SolutionDir)build\x64\$(Configuration)\DetectEngine\</IntDir>
   </PropertyGroup>
 
-  <!-- Debug Win32 -->
+  <!-- ============================================================
+       Debug Win32
+       ============================================================ -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>false</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;VDE_EXPORTS;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(NpcapSDKDir)Include;$(ProjectDir)include;$(ProjectDir)third_party\cJSON;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;VDE_EXPORTS;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;USE_OLD_ROARING;NDPI_LIB_COMPILATION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(NpcapSDKDir)Include;$(NdpiSDKDir)include;$(PthreadsDir)include;$(ProjectDir)include;$(ProjectDir)third_party\cJSON;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
-      <DisableSpecificWarnings>4996;4244;4267;4018;4100;4127</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4996;4244;4267;4018;4100;4127;4201</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(NpcapSDKDir)Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>wpcap.lib;Packet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(NpcapSDKDir)Lib;$(NdpiSDKDir)lib\Win32;$(PthreadsDir)lib\Win32;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>wpcap.lib;Packet.lib;ndpi.lib;pthreadVC2.lib;ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>$(ProjectDir)DetectEngine.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
 
-  <!-- Release Win32 -->
+  <!-- ============================================================
+       Release Win32
+       ============================================================ -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -118,42 +150,46 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>false</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;VDE_EXPORTS;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(NpcapSDKDir)Include;$(ProjectDir)include;$(ProjectDir)third_party\cJSON;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;VDE_EXPORTS;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;USE_OLD_ROARING;NDPI_LIB_COMPILATION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(NpcapSDKDir)Include;$(NdpiSDKDir)include;$(PthreadsDir)include;$(ProjectDir)include;$(ProjectDir)third_party\cJSON;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <DisableSpecificWarnings>4996;4244;4267;4018;4100;4127</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4996;4244;4267;4018;4100;4127;4201</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalLibraryDirectories>$(NpcapSDKDir)Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>wpcap.lib;Packet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(NpcapSDKDir)Lib;$(NdpiSDKDir)lib\Win32;$(PthreadsDir)lib\Win32;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>wpcap.lib;Packet.lib;ndpi.lib;pthreadVC2.lib;ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>$(ProjectDir)DetectEngine.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
 
-  <!-- Debug x64 -->
+  <!-- ============================================================
+       Debug x64
+       ============================================================ -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>false</SDLCheck>
-      <PreprocessorDefinitions>_WIN64;_DEBUG;_WINDOWS;_USRDLL;VDE_EXPORTS;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(NpcapSDKDir)Include;$(ProjectDir)include;$(ProjectDir)third_party\cJSON;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_WIN64;_DEBUG;_WINDOWS;_USRDLL;VDE_EXPORTS;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;USE_OLD_ROARING;NDPI_LIB_COMPILATION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(NpcapSDKDir)Include;$(NdpiSDKDir)include;$(PthreadsDir)include;$(ProjectDir)include;$(ProjectDir)third_party\cJSON;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
-      <DisableSpecificWarnings>4996;4244;4267;4018;4100;4127</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4996;4244;4267;4018;4100;4127;4201</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(NpcapSDKDir)Lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>wpcap.lib;Packet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(NpcapSDKDir)Lib\x64;$(NdpiSDKDir)lib\x64;$(PthreadsDir)lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>wpcap.lib;Packet.lib;ndpi.lib;pthreadVC2.lib;ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>$(ProjectDir)DetectEngine.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
 
-  <!-- Release x64 -->
+  <!-- ============================================================
+       Release x64
+       ============================================================ -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -161,17 +197,17 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>false</SDLCheck>
-      <PreprocessorDefinitions>_WIN64;NDEBUG;_WINDOWS;_USRDLL;VDE_EXPORTS;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(NpcapSDKDir)Include;$(ProjectDir)include;$(ProjectDir)third_party\cJSON;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>_WIN64;NDEBUG;_WINDOWS;_USRDLL;VDE_EXPORTS;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;USE_OLD_ROARING;NDPI_LIB_COMPILATION;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>$(NpcapSDKDir)Include;$(NdpiSDKDir)include;$(PthreadsDir)include;$(ProjectDir)include;$(ProjectDir)third_party\cJSON;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <DisableSpecificWarnings>4996;4244;4267;4018;4100;4127</DisableSpecificWarnings>
+      <DisableSpecificWarnings>4996;4244;4267;4018;4100;4127;4201</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalLibraryDirectories>$(NpcapSDKDir)Lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>wpcap.lib;Packet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(NpcapSDKDir)Lib\x64;$(NdpiSDKDir)lib\x64;$(PthreadsDir)lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>wpcap.lib;Packet.lib;ndpi.lib;pthreadVC2.lib;ws2_32.lib;Iphlpapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>$(ProjectDir)DetectEngine.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>

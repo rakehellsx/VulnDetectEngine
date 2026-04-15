@@ -1,136 +1,216 @@
-# Windows 漏洞攻击检测引擎 (VulnDetectEngine)
+# VulnDetectEngine (漏洞攻击检测引擎)
 
-## 1. 简介
+VulnDetectEngine 是一款基于 C/C++ 和 libpcap 开发的高性能漏洞攻击检测引擎。它以动态链接库 (DLL/SO) 的形式提供，可以轻松集成到各类安全产品（如 IDS/IPS、端点安全、微隔离系统）中。
 
-VulnDetectEngine 是一套基于 C/C++ (Visual Studio 2017) 和 libpcap (Npcap) 实现的轻量级 Windows 漏洞攻击检测引擎。系统以 DLL 动态链接库的形式提供核心能力，能够被各类安全审计平台、主机入侵检测系统 (HIDS) 以及流量分析产品无缝集成。
+本项目在全平台（Windows/Linux）统一使用工业级深度包检测引擎 **nDPI 4.x** 作为底层协议识别基础，在其之上实现了精细化的协议字段提取和基于 JSON 的动态漏洞特征匹配。
 
-引擎的核心目标是通过对网络数据包的深度协议解析与多维度特征匹配，实时发现针对 Windows 系统的典型漏洞攻击行为（如永恒之蓝、BlueKeep 等）。系统内置了灵活的规则引擎与 JSON 格式的特征库，支持无状态单包匹配、有状态会话追踪以及基于时间窗口的阈值统计分析。
+---
 
-## 2. 核心架构与功能特性
+## 🌟 核心特性
 
-### 2.1 模块划分
+- **跨平台多线程架构**：支持 Linux (SO) 和 Windows (DLL)，自动枚举所有网卡并启动独立捕获线程。
+- **工业级协议解析**：集成 nDPI 4.x 引擎，支持 280+ 种应用层协议精准识别，辅以深度字段解析（SMB/HTTP/DNS/RDP/DCERPC/Kerberos 等）。
+- **动态漏洞特征库**：基于 JSON 格式的规则库，支持正则表达式（POSIX regex/PCRE2）和多维条件匹配，支持**热重载**（无需重启引擎）。
+- **三种检测模式**：
+  - `STATELESS`（无状态）：单包特征匹配（如 HTTP XSS、路径遍历、Log4Shell）。
+  - `STATEFUL`（有状态）：基于会话哈希表的上下文追踪（如 EternalBlue 协商与触发的两阶段检测）。
+  - `THRESHOLD`（阈值）：基于时间滑动窗口的行为检测（如端口扫描、暴力破解）。
+- **无锁高性能统计**：采用原子操作 (`__sync_fetch_and_add`) 实现每网卡维度的流量与告警统计，无锁争用。
 
-本系统在设计上充分考虑了可扩展性与集成便利性，主要包含以下核心模块：
+---
 
-*   **数据捕获层**：基于 libpcap 接口，支持网卡实时混杂模式抓包（LIVE 模式）与离线 PCAP 文件回放分析（OFFLINE 模式）。
-*   **协议解析层**：实现了从链路层到应用层的逐级解包。当前支持的协议包括：Ethernet、IPv4、TCP、UDP、ICMP、DNS、HTTP、SMBv1/v2/v3、RDP(TPKT/X.224)、DCERPC 以及 NetBIOS Session Service。
-*   **规则引擎层**：采用 cJSON 库解析外部特征库文件。支持正则表达式、十六进制字节序列匹配、数值比较等多种操作符。具备智能会话追踪能力，可对多步攻击流程进行关联分析。
-*   **日志与告警层**：提供独立的文件日志记录与结构化 JSON 格式告警输出，便于对接第三方 SIEM/SOC 平台。
+## 📁 目录结构
 
-### 2.2 技术指标与价值体现
+```text
+VulnDetectEngine/
+├── DetectEngine/                 # 核心检测引擎 (DLL/SO)
+│   ├── include/                  # 对外导出接口及内部头文件
+│   ├── src/                      # 核心源码 (协议解析、规则引擎、多线程调度)
+│   └── third_party/              # 第三方依赖 (cJSON)
+├── AttackSimulator/              # 漏洞攻击模拟测试程序
+├── TestApp/                      # 宿主程序调用示例 (命令行检测工具)
+├── RuleDB/                       # 漏洞特征库 (vuln_rules.json)
+├── docs/                         # 文档
+├── scripts/                      # 测试 pcap 生成脚本
+├── Makefile                      # Linux 构建系统
+└── VulnDetectEngine.sln          # Windows VS2017 解决方案
+```
 
-在系统价值与能力储备方面，本引擎展现了以下技术特性：
+---
 
-*   **灵活的策略编排能力**：支持将基础的检测算子（如载荷匹配、端口过滤、协议识别）进行人工编排，形成复杂的渗透测试检测策略。同时，引擎内部也支持基于状态机的智能策略调用，能够对完整的攻击路径进行推演与识别。
-*   **丰富的特征库储备**：初始版本已内置 18 种高危攻击技法特征，涵盖缓冲区溢出、远程代码执行 (RCE)、凭证窃取、协议暴力破解等多个维度。
-*   **高性能并发处理**：核心检测流程采用无锁设计（针对单包匹配），并配备了高效的哈希表用于会话追踪与频率统计，能够在千兆网络环境下保持较低的 CPU 占用率。
+## 🛠️ 编译指南 (Linux)
 
-## 3. 术语阐述
+### 1. 安装依赖
 
-为便于理解系统的检测逻辑，特对以下核心术语进行说明：
+在 Ubuntu/Debian 上：
+```bash
+sudo apt-get update
+sudo apt-get install build-essential libpcap-dev libndpi-dev
+```
 
-*   **算子 (Operator)**：指引擎内部执行的最基础的匹配动作。例如“等于(EQ)”、“包含(CONTAINS)”、“正则匹配(REGEX)”以及“十六进制序列匹配(HEX_MATCH)”。
-*   **攻击技法 (Attack Technique)**：攻击者在漏洞利用过程中采用的具体手段。例如通过发送特定的 SMBv1 Negotiate 协议包来触发缓冲区溢出，或利用 JNDI 注入特性执行恶意代码。
-*   **攻击流程 (Attack Flow)**：由多个攻击技法按特定顺序组合而成的完整利用链。例如，永恒之蓝攻击通常包含“协议协商”、“内存布局”、“触发溢出”以及“后门植入”等多个阶段。
-*   **渗透测试策略 (Penetration Test Strategy)**：为检测特定攻击流程而制定的综合性规则集。本引擎通过 JSON 规则文件将这些策略固化，指导引擎进行数据包的过滤、状态追踪与告警生成。
+### 2. 编译项目
 
-## 4. 编译与运行指南
+在项目根目录下执行：
+```bash
+make all
+```
 
-### 4.1 环境准备
+产物将生成在 `bin/` 目录下：
+- `libVulnDetectEngine.so`：检测引擎共享库
+- `TestApp`：检测引擎调用示例
+- `AttackSimulator`：攻击模拟器
 
-1.  **操作系统**：Windows 10 / Windows Server 2016 或更高版本。
-2.  **开发工具**：Visual Studio 2017 (平台工具集 v141)。
-3.  **依赖库**：安装 Npcap 并下载 Npcap SDK。请将 SDK 解压至解决方案根目录下的 `third_party\npcap-sdk\` 文件夹中（需包含 `Include` 和 `Lib` 子目录）。
+---
 
-### 4.2 编译步骤
+## 🛠️ 编译指南 (Windows)
 
-1.  使用 Visual Studio 2017 打开 `VulnDetectEngine.sln`。
-2.  选择所需的构建配置（如 `Release | x64`）。
-3.  右键点击解决方案，选择“生成解决方案”。
-4.  编译完成后，`DetectEngine.dll`、`DetectEngine.lib` 以及测试程序 `TestApp.exe` 将生成在对应的输出目录中（例如 `x64\Release\`）。
+在 Windows 下，引擎同样依赖 nDPI 进行协议解析。由于 nDPI 官方不提供 Windows 预编译库，需要先自行编译 nDPI。
 
-### 4.3 运行测试程序
+### 1. 准备基础依赖
 
-`TestApp.exe` 是一个命令行宿主程序示例，展示了如何加载 DLL 并启动检测引擎。
+1. **Npcap SDK**
+   - 安装 Npcap 运行时环境（勾选 "Install Npcap in WinPcap API-compatible Mode"）：https://npcap.com/#download
+   - 下载 Npcap SDK，解压到项目根目录下的 `third_party\npcap-sdk\`
 
-*   **列出可用网卡**：
-    ```cmd
-    TestApp.exe -l
-    ```
-*   **启动实时检测**（需替换为实际的网卡设备名）：
-    ```cmd
-    TestApp.exe -i "\Device\NPF_{...}" -d RuleDB\vuln_rules.json -o logs
-    ```
-*   **离线 PCAP 分析**：
-    ```cmd
-    TestApp.exe -r sample_attack.pcap -d RuleDB\vuln_rules.json
-    ```
+2. **pthreads-win32** (nDPI 内部线程依赖)
+   - 在 Visual Studio 2017 中打开 `VulnDetectEngine.sln`
+   - 通过 NuGet 包管理器安装：`工具` -> `NuGet 包管理器` -> `管理解决方案的 NuGet 包`
+   - 搜索并安装 `pthreads.2.9.1.4`
 
-## 5. 漏洞特征库扩展指南
+### 2. 编译 nDPI (Windows)
 
-系统的核心检测能力由 `RuleDB/vuln_rules.json` 文件驱动。安全研究人员可以人工编排新的攻击技法规则，并动态加载到引擎中。
+nDPI 支持通过 MSYS2 或 Visual Studio 编译。这里推荐使用 VS2017 官方工程：
 
-### 5.1 规则结构示例
+1. 克隆 nDPI 源码：
+   ```cmd
+   git clone https://github.com/ntop/nDPI.git
+   cd nDPI
+   ```
+2. 生成 Windows 头文件：
+   - 运行 `windows\win32_setup.bat` 脚本（它会复制 `ndpi_typedefs.h.in` 等文件）
+3. 编译 nDPI：
+   - 使用 VS2017 打开 `windows\nDPI.sln`
+   - 选择 `Release` | `x64`，右键点击 `nDPI` 工程，选择"生成"
+4. **融合到 VulnDetectEngine**：
+   - 在本项目的 `third_party\` 下创建 `ndpi\` 目录
+   - 复制头文件：将 nDPI 源码的 `src\include\` 目录复制到 `third_party\ndpi\include\`
+   - 复制静态库：将编译生成的 `ndpi.lib` (位于 `windows\x64\Release\`) 复制到 `third_party\ndpi\lib\x64\`
 
-以下为检测 MS08-067 漏洞的无状态规则示例：
+*注：`DetectEngine.vcxproj` 已配置好相对路径，只需将 nDPI 产物放入 `third_party\ndpi\` 即可自动链接。*
+
+### 3. 编译核心引擎
+
+1. 使用 VS2017 打开 `VulnDetectEngine.sln`
+2. 选择 `Release` | `x64`
+3. 按 `Ctrl+Shift+B` 生成解决方案
+
+产物将生成在 `bin\x64\Release\` 目录下。
+
+---
+
+## 🚀 引擎集成与使用
+
+### 1. 引入头文件
+
+宿主程序只需包含一个头文件：
+```c
+#include "VulnDetectEngine.h"
+```
+
+### 2. 核心 API 调用流程
+
+```c
+// 1. 定义告警回调函数
+void VDE_CALLBACK my_alert_cb(const AlertInfo* alert, void* user_data) {
+    printf("[ALERT] %s: %s (Severity: %d)\n", 
+           alert->rule_id, alert->rule_name, alert->severity);
+}
+
+// 2. 初始化配置
+VDE_Config config;
+memset(&config, 0, sizeof(config));
+config.mode = VDE_MODE_LIVE_ALL;           // 监听所有网卡
+config.rule_file = "RuleDB/vuln_rules.json"; // 规则库路径
+config.alert_cb = my_alert_cb;             // 注册回调
+
+// 3. 创建引擎实例
+VDE_Handle engine = VDE_Create(&config);
+if (!engine) {
+    printf("引擎创建失败\n");
+    return;
+}
+
+// 4. 启动多线程捕获
+if (VDE_Start(engine) != VDE_OK) {
+    printf("启动失败\n");
+}
+
+// 5. 运行中可以获取统计信息或热重载规则
+VDE_IfaceStat stats[10];
+int count = 0;
+VDE_GetIfaceStatistics(engine, stats, 10, &count);
+// VDE_ReloadRules(engine);
+
+// 6. 停止并清理资源
+VDE_Stop(engine);
+VDE_Destroy(engine);
+```
+
+---
+
+## 🛡️ 漏洞特征库扩展
+
+规则库位于 `RuleDB/vuln_rules.json`，修改后调用 `VDE_ReloadRules()` 即可热生效。
+
+### 规则字段说明
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | 字符串 | 规则唯一标识，如 "VDE-001" |
+| `name` | 字符串 | 规则名称 |
+| `category` | 字符串 | 漏洞类别（SMB/HTTP/DNS 等） |
+| `severity` | 整数 | 严重级别：1(INFO), 2(LOW), 3(MEDIUM), 4(HIGH), 5(CRITICAL) |
+| `type` | 字符串 | 匹配模式："STATELESS" 或 "STATEFUL" 或 "THRESHOLD" |
+| `conditions` | 数组 | 匹配条件列表（AND 逻辑） |
+
+### 支持的操作符 (OP)
+
+- `EQ`：精确匹配（数字或字符串）
+- `CONTAINS`：子串包含（大小写不敏感）
+- `REGEX`：正则表达式匹配（POSIX ERE 标准）
+
+### 编写示例：检测 HTTP 路径遍历
 
 ```json
 {
-  "id": "VDE-006",
-  "name": "MS08-067-NetAPI",
-  "cve": "CVE-2008-4250",
-  "description": "MS08-067 NetAPI缓冲区溢出漏洞检测",
-  "severity": "CRITICAL",
-  "protocol": "SMB",
-  "match_type": "STATELESS",
-  "conditions": [
-    {
-      "field": "dcerpc_uuid",
-      "op": "EQ",
-      "value": "4b324fc8-1670-01d3-1278-5a47bf6ee188"
-    },
-    {
-      "field": "dcerpc_opnum",
-      "op": "EQ",
-      "value": "0x1F"
-    },
-    {
-      "field": "payload_pattern",
-      "op": "REGEX",
-      "value": "(\\.\\./|\\.\\.\\\\){3,}"
-    }
-  ]
+    "id": "VDE-039",
+    "name": "HTTP Path Traversal (../../)",
+    "category": "HTTP",
+    "severity": 4,
+    "type": "STATELESS",
+    "conditions": [
+        { "field": "app_proto", "op": "EQ", "value": "PROTO_HTTP" },
+        { "field": "http_uri", "op": "CONTAINS", "value": "../.." }
+    ]
 }
 ```
 
-### 5.2 匹配类型 (match_type)
+---
 
-*   `STATELESS`：单包无状态匹配。只要当前数据包满足所有 `conditions` 算子，即触发告警。
-*   `STATEFUL`：有状态匹配。适用于多步攻击流程推演。当首包满足 `conditions` 时，引擎会建立会话追踪状态机；如果在规定时间 (`max_interval_ms`) 内，后续数据包满足 `follow_up` 条件，则触发最终告警。
-*   `THRESHOLD`：阈值匹配。用于检测暴力破解、端口扫描等行为。当特定分组键 (`group_by`) 在时间窗口 (`window_ms`) 内的事件计数达到 `count` 阈值时触发。
+## 🧪 攻击模拟与集成测试
 
-### 5.3 支持的匹配字段 (field)
+项目内置了 `AttackSimulator` 用于验证检测引擎的准确性。
 
-引擎解析层支持提取丰富的协议字段用于策略编排，包括但不限于：
+### 运行全量测试
 
-*   **通用网络层**：`src_ip`, `dst_ip`, `src_port`, `dst_port`, `tcp_flags`, `payload_length`。
-*   **应用层协议**：
-    *   **SMB**：`smb_command`, `smb_status`, `smb_version`, `smb_tree_path`, `smb_filename`。
-    *   **DCERPC**：`dcerpc_uuid`, `dcerpc_opnum`。
-    *   **HTTP**：`http_method`, `http_uri`, `http_header_any`。
-    *   **RDP**：`rdp_pdu_type`, `rdp_channel`。
-*   **原始载荷**：`payload_pattern`（配合 REGEX 或 HEX_MATCH 算子使用）。
+1. 启动 TestApp 监听所有网卡：
+   ```bash
+   sudo ./bin/TestApp -i all -r RuleDB/vuln_rules.json
+   ```
+2. 运行攻击模拟器发送测试流量：
+   ```bash
+   ./bin/AttackSimulator 127.0.0.1 127.0.0.1 80 all
+   ```
+3. TestApp 将实时输出触发的漏洞告警。
 
-## 6. DLL 接口集成指南
-
-第三方系统可通过引入 `VulnDetectEngine.h` 并链接 `DetectEngine.lib` 来集成检测能力。
-
-核心调用流程如下：
-
-1.  **配置初始化**：填充 `VDE_Config` 结构体，设置工作模式、网卡名称、规则库路径以及告警回调函数 (`alert_callback`)。
-2.  **创建引擎**：调用 `VDE_Create(&config, &handle)` 获取引擎实例句柄。
-3.  **启动检测**：调用 `VDE_Start(handle)`，引擎将在后台线程中进行数据捕获与分析。
-4.  **接收告警**：当检测到攻击时，引擎会在内部线程中触发用户注册的告警回调函数，传递结构化的 `VDE_Alert` 数据。
-5.  **停止与销毁**：调用 `VDE_Stop(handle)` 停止捕获，调用 `VDE_Destroy(handle)` 释放资源。
-
-*注意：告警回调函数应尽量保持轻量，避免执行耗时的 I/O 操作，以免阻塞底层数据包捕获队列。*
+*作者：Manus AI*

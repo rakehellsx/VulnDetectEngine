@@ -1,12 +1,15 @@
 /**
  * @file    proto_parser.c
- * @brief   协议解析层实现 —— 跨平台双路径
+ * @brief   协议解析层实现 —— 全平台统一使用 nDPI
  *
- * 编译策略：
- *   - Linux/macOS : 使用 nDPI 4.x 深度包检测（200+ 协议精准分类）
- *   - Windows     : 使用内置轻量协议解析器（仅依赖 Npcap SDK，零外部依赖）
+ * Windows 和 Linux 均使用 nDPI 4.x 作为协议识别引擎。
+ * 在 nDPI 识别结果之上，对 SMB/HTTP/DNS/RDP/DCERPC/Kerberos 等关键协议
+ * 进行字段级细粒度解析，填充 ParsedPacket 结构体。
  *
- * 对外接口在两个平台上完全一致。
+ * Windows 编译需要：
+ *   1. nDPI SDK：将 include 目录加入 AdditionalIncludeDirectories
+ *   2. ndpi.lib：加入 AdditionalDependencies
+ *   3. pthreads-win32：用于 nDPI 内部线程支持
  */
 
 #ifdef _WIN32
@@ -343,7 +346,6 @@ int PP_Init(NdpiContext* ctx)
     if (!ctx) return -1;
     memset(ctx, 0, sizeof(NdpiContext));
 
-#ifndef _WIN32
     ctx->ndpi_struct = ndpi_init_detection_module(ndpi_no_prefs);
     if (!ctx->ndpi_struct) {
         fprintf(stderr, "[proto_parser] ndpi_init_detection_module 失败\n");
@@ -356,24 +358,16 @@ int PP_Init(NdpiContext* ctx)
     fprintf(stderr, "[proto_parser] nDPI %s 初始化成功，支持 %u 个协议\n",
             ndpi_revision(),
             ndpi_get_num_supported_protocols(ctx->ndpi_struct));
-#else
-    ctx->ndpi_struct = NULL;
-    fprintf(stderr, "[proto_parser] Windows 内置协议解析器初始化成功\n");
-#endif
     return 0;
 }
 
 void PP_Destroy(NdpiContext* ctx)
 {
     if (!ctx) return;
-#ifndef _WIN32
     if (ctx->ndpi_struct) {
         ndpi_exit_detection_module(ctx->ndpi_struct);
         ctx->ndpi_struct = NULL;
     }
-#else
-    ctx->ndpi_struct = NULL;
-#endif
 }
 
 /* =========================================================
@@ -383,29 +377,22 @@ NdpiFlowCtx* PP_FlowCreate(void)
 {
     NdpiFlowCtx* fctx = (NdpiFlowCtx*)calloc(1, sizeof(NdpiFlowCtx));
     if (!fctx) return NULL;
-
-#ifndef _WIN32
     fctx->flow = (struct ndpi_flow_struct*)calloc(1, sizeof(struct ndpi_flow_struct));
     if (!fctx->flow) {
         free(fctx);
         return NULL;
     }
-#else
-    fctx->flow = NULL;
-#endif
     return fctx;
 }
 
 void PP_FlowDestroy(NdpiFlowCtx* fctx)
 {
     if (!fctx) return;
-#ifndef _WIN32
     if (fctx->flow) {
         ndpi_free_flow_data(fctx->flow);
         free(fctx->flow);
         fctx->flow = NULL;
     }
-#endif
     free(fctx);
 }
 
@@ -494,10 +481,8 @@ int PP_ParsePacket(
     }
 
 /* =========================================================
- *  应用层协议识别（平台分支）
+ *  应用层协议识别（全平台统一使用 nDPI）
  * ========================================================= */
-#ifndef _WIN32
-    /* ---- Linux: nDPI 深度包检测 ---- */
     struct ndpi_flow_struct* flow = NULL;
     NdpiFlowCtx* tmp_fctx = NULL;
 
@@ -629,86 +614,6 @@ int PP_ParsePacket(
     }
 
     if (tmp_fctx) PP_FlowDestroy(tmp_fctx);
-
-#else
-    /* ---- Windows: 内置轻量协议解析器 ---- */
-    (void)ctx;
-    (void)fctx;
-
-    /* SMB 检测（端口 + 魔数） */
-    if (out_pkt->payload_len >= 8 &&
-        (out_pkt->dst_port == 445 || out_pkt->src_port == 445 ||
-         out_pkt->dst_port == 139 || out_pkt->src_port == 139))
-    {
-        parse_smb_fields(out_pkt);
-        if (out_pkt->app_proto == PROTO_UNKNOWN)
-            out_pkt->app_proto = PROTO_SMB1;
-    }
-
-    /* HTTP 检测（请求行特征） */
-    if (out_pkt->app_proto == PROTO_UNKNOWN && out_pkt->payload_len >= 4) {
-        const char* p4 = (const char*)out_pkt->payload;
-        int is_http = (memcmp(p4, "GET ", 4) == 0 ||
-                       memcmp(p4, "POST", 4) == 0 ||
-                       memcmp(p4, "PUT ", 4) == 0 ||
-                       memcmp(p4, "HEAD", 4) == 0 ||
-                       memcmp(p4, "DELE", 4) == 0 ||
-                       memcmp(p4, "OPTI", 4) == 0 ||
-                       memcmp(p4, "PATC", 4) == 0 ||
-                       memcmp(p4, "HTTP", 4) == 0);
-        if (is_http) {
-            out_pkt->app_proto = PROTO_HTTP;
-            snprintf(out_pkt->ndpi_proto_name, sizeof(out_pkt->ndpi_proto_name), "HTTP");
-            parse_http_fields_raw(out_pkt);
-        }
-    }
-
-    /* DNS（UDP 53） */
-    if (out_pkt->app_proto == PROTO_UNKNOWN &&
-        ip->protocol == IP_PROTO_UDP &&
-        (out_pkt->dst_port == 53 || out_pkt->src_port == 53))
-    {
-        out_pkt->app_proto = PROTO_DNS;
-        snprintf(out_pkt->ndpi_proto_name, sizeof(out_pkt->ndpi_proto_name), "DNS");
-        parse_dns_fields_raw(out_pkt);
-    }
-
-    /* RDP（TCP 3389） */
-    if (out_pkt->app_proto == PROTO_UNKNOWN &&
-        (out_pkt->dst_port == 3389 || out_pkt->src_port == 3389))
-    {
-        out_pkt->app_proto = PROTO_RDP;
-        snprintf(out_pkt->ndpi_proto_name, sizeof(out_pkt->ndpi_proto_name), "RDP");
-        parse_rdp_fields(out_pkt);
-    }
-
-    /* DCERPC（TCP 135/593） */
-    if (out_pkt->app_proto == PROTO_UNKNOWN &&
-        (out_pkt->dst_port == 135 || out_pkt->src_port == 135 ||
-         out_pkt->dst_port == 593 || out_pkt->src_port == 593))
-    {
-        out_pkt->app_proto = PROTO_DCERPC;
-        snprintf(out_pkt->ndpi_proto_name, sizeof(out_pkt->ndpi_proto_name), "DCERPC");
-        parse_dcerpc_fields(out_pkt);
-    }
-
-    /* Kerberos（TCP/UDP 88） */
-    if (out_pkt->app_proto == PROTO_UNKNOWN &&
-        (out_pkt->dst_port == 88 || out_pkt->src_port == 88))
-    {
-        out_pkt->app_proto = PROTO_KERBEROS;
-        snprintf(out_pkt->ndpi_proto_name, sizeof(out_pkt->ndpi_proto_name), "Kerberos");
-        parse_kerberos_fields(out_pkt);
-    }
-
-    /* 最终端口回退 */
-    if (out_pkt->app_proto == PROTO_UNKNOWN) {
-        ProtoType fb = port_to_proto(out_pkt->dst_port);
-        if (fb == PROTO_UNKNOWN) fb = port_to_proto(out_pkt->src_port);
-        if (fb != PROTO_UNKNOWN) out_pkt->app_proto = fb;
-    }
-
-#endif /* _WIN32 */
 
     return 1;
 }

@@ -1,12 +1,17 @@
 /**
  * @file    proto_parser.h
- * @brief   协议解析层 —— 基于 nDPI 的深度包检测
+ * @brief   协议解析层 —— 全平台统一使用 nDPI 深度包检测
  *
- * 使用 nDPI 4.x 作为协议识别引擎（200+ 协议精准分类）；
- * 在 nDPI 识别结果之上，对 SMB/HTTP/DNS/RDP/DCERPC 等关键协议
+ * Windows 和 Linux 均使用 nDPI 4.x 作为协议识别引擎（支持 200+ 协议精准分类）。
+ * 在 nDPI 识别结果之上，对 SMB/HTTP/DNS/RDP/DCERPC/Kerberos 等关键协议
  * 进行字段级细粒度解析，填充 ParsedPacket 结构体供规则引擎使用。
  *
- * 跨平台：Windows (MSVC/MinGW) + Linux (GCC)
+ * nDPI 头文件路径说明：
+ *   Linux  : 系统安装路径  <ndpi/ndpi_api.h>  (apt install libndpi-dev)
+ *   Windows: 通过工程文件 AdditionalIncludeDirectories 指向本地 nDPI SDK：
+ *            third_party\ndpi\include  (包含 ndpi/ndpi_api.h 等头文件)
+ *
+ * 跨平台：Windows (MSVC 2017+) + Linux (GCC 7+)
  */
 
 #ifndef PROTO_PARSER_H
@@ -31,12 +36,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-/* nDPI 头文件（仅 Linux/macOS；Windows 使用内置协议解析器，无需 nDPI） */
-#ifndef _WIN32
-#  include <ndpi/ndpi_api.h>
-#  include <ndpi/ndpi_protocol_ids.h>
-#  include <ndpi/ndpi_typedefs.h>
-#endif
+/* nDPI 头文件（全平台统一使用 nDPI）
+ * Windows 下需确保 nDPI SDK 的 include 目录已加入工程的附加包含目录 */
+#include <ndpi/ndpi_api.h>
+#include <ndpi/ndpi_protocol_ids.h>
+#include <ndpi/ndpi_typedefs.h>
 
 /* =========================================================
  *  底层网络头结构（跨平台 packed）
@@ -262,32 +266,19 @@ typedef struct ParsedPacket {
 } ParsedPacket;
 
 /* =========================================================
- *  协议解析引擎上下文（跨平台抽象）
- *  Linux  : ndpi_struct 指向真实的 nDPI 模块
- *  Windows: ndpi_struct 为 NULL，使用内置轻量解析器
+ *  协议解析引擎上下文（全平台统一使用 nDPI）
  * ========================================================= */
 typedef struct NdpiContext {
-#ifndef _WIN32
     struct ndpi_detection_module_struct* ndpi_struct;
-#else
-    void*  ndpi_struct;   /* 占位，Windows 下始终为 NULL */
-#endif
 } NdpiContext;
 
 /* =========================================================
- *  单流上下文（跨平台抽象）
+ *  单流上下文（全平台统一使用 nDPI）
  * ========================================================= */
 typedef struct NdpiFlowCtx {
-#ifndef _WIN32
     struct ndpi_flow_struct* flow;
     uint8_t                  detection_completed;
     ndpi_protocol            detected_proto;
-#else
-    void*    flow;           /* 占位，Windows 下始终为 NULL */
-    uint8_t  detection_completed;
-    uint16_t proto_master;
-    uint16_t proto_app;
-#endif
 } NdpiFlowCtx;
 
 /* =========================================================
