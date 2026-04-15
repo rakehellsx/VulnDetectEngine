@@ -3,23 +3,24 @@
  * @brief   VulnDetectEngine DLL 宿主程序示例
  *
  * 用法：
- *   TestApp.exe [选项]
+ *   TestApp [选项]
  *
  * 选项：
  *   -l               列出所有网络接口
- *   -i <接口名>      指定监听网卡（LIVE模式）
- *   -r <pcap文件>    读取离线pcap文件（OFFLINE模式）
- *   -d <规则库路径>  指定规则库JSON文件（默认 ./RuleDB/vuln_rules.json）
+ *   -i <接口名>      指定监听网卡（LIVE 实时模式）
+ *   -p <pcap文件>    读取离线 pcap 文件（OFFLINE 模式）
+ *   -r <规则库路径>  指定规则库 JSON 文件（默认 ./RuleDB/vuln_rules.json）
  *   -o <日志目录>    指定日志输出目录（默认 ./logs）
- *   -f <BPF过滤>     设置BPF过滤表达式
- *   -v               详细输出（DEBUG日志级别）
- *   -s               每5秒打印一次统计信息
+ *   -f <BPF过滤>     设置 BPF 过滤表达式（仅 LIVE 模式有效）
+ *   -v               详细输出（DEBUG 日志级别）
+ *   -s               每 5 秒打印一次统计信息
  *   -h               显示帮助
  *
  * 示例：
- *   TestApp.exe -l
- *   TestApp.exe -i "\Device\NPF_{GUID}" -d ./RuleDB/vuln_rules.json -o ./logs
- *   TestApp.exe -r capture.pcap -d ./RuleDB/vuln_rules.json
+ *   TestApp -l
+ *   TestApp -i eth0 -r RuleDB/vuln_rules.json -o ./logs
+ *   TestApp -p capture.pcap -r RuleDB/vuln_rules.json
+ *   TestApp -i "\Device\NPF_{GUID}" -r RuleDB\vuln_rules.json -f "tcp port 445"
  */
 
 #include <stdio.h>
@@ -62,7 +63,11 @@ static void sig_handler(int sig)
 /* =========================================================
  *  告警回调函数
  * ========================================================= */
+#ifdef _WIN32
 static void __cdecl on_alert(const VDE_Alert* alert, void* ctx)
+#else
+static void on_alert(const VDE_Alert* alert, void* ctx)
+#endif
 {
     (void)ctx;
 
@@ -149,18 +154,21 @@ static void print_help(const char* prog)
 {
     printf("用法: %s [选项]\n\n", prog);
     printf("  -l               列出所有网络接口\n");
-    printf("  -i <接口名>      指定监听网卡（LIVE模式）\n");
-    printf("  -r <pcap文件>    读取离线pcap文件（OFFLINE模式）\n");
-    printf("  -d <规则库路径>  规则库JSON文件（默认 ./RuleDB/vuln_rules.json）\n");
+    printf("  -i <接口名>      指定监听网卡（LIVE 实时模式）\n");
+    printf("  -p <pcap文件>    读取离线 pcap 文件（OFFLINE 模式）\n");
+    printf("  -r <规则库路径>  规则库 JSON 文件（默认 ./RuleDB/vuln_rules.json）\n");
     printf("  -o <日志目录>    日志输出目录（默认 ./logs）\n");
-    printf("  -f <BPF过滤>     BPF过滤表达式，如 \"tcp port 445\"\n");
-    printf("  -v               详细输出（DEBUG级别）\n");
-    printf("  -s               每5秒打印统计信息\n");
+    printf("  -f <BPF过滤>     BPF 过滤表达式，如 \"tcp port 445\"（仅 LIVE 模式）\n");
+    printf("  -v               详细输出（DEBUG 级别）\n");
+    printf("  -s               每 5 秒打印统计信息\n");
     printf("  -h               显示本帮助\n\n");
     printf("示例：\n");
     printf("  %s -l\n", prog);
-    printf("  %s -i \"\\Device\\NPF_{GUID}\" -d RuleDB/vuln_rules.json -o logs\n", prog);
-    printf("  %s -r capture.pcap -d RuleDB/vuln_rules.json\n\n", prog);
+    printf("  %s -i eth0 -r RuleDB/vuln_rules.json -o logs\n", prog);
+    printf("  %s -p capture.pcap -r RuleDB/vuln_rules.json\n", prog);
+#ifdef _WIN32
+    printf("  %s -i \"\\Device\\NPF_{GUID}\" -r RuleDB\\vuln_rules.json -f \"tcp port 445\"\n\n", prog);
+#endif
 }
 
 /* =========================================================
@@ -169,13 +177,13 @@ static void print_help(const char* prog)
 int main(int argc, char* argv[])
 {
     /* 默认参数 */
-    char device[VDE_MAX_DEV_LEN]      = "";
+    char device[VDE_MAX_DEV_LEN]        = "";
 #ifdef _WIN32
-    char rule_db[VDE_MAX_PATH_LEN]    = ".\\RuleDB\\vuln_rules.json";
-    char log_dir[VDE_MAX_PATH_LEN]    = ".\\logs";
+    char rule_db[VDE_MAX_PATH_LEN]      = ".\\RuleDB\\vuln_rules.json";
+    char log_dir[VDE_MAX_PATH_LEN]      = ".\\logs";
 #else
-    char rule_db[VDE_MAX_PATH_LEN]    = "./RuleDB/vuln_rules.json";
-    char log_dir[VDE_MAX_PATH_LEN]    = "./logs";
+    char rule_db[VDE_MAX_PATH_LEN]      = "./RuleDB/vuln_rules.json";
+    char log_dir[VDE_MAX_PATH_LEN]      = "./logs";
 #endif
     char bpf_filter[VDE_MAX_FILTER_LEN] = "";
     VDE_CaptureMode mode = VDE_MODE_LIVE;
@@ -191,21 +199,33 @@ int main(int argc, char* argv[])
         } else if (strcmp(argv[i], "-l") == 0) {
             list_dev = 1;
         } else if (strcmp(argv[i], "-i") == 0 && i + 1 < argc) {
+            /* -i <网卡名>：LIVE 实时模式 */
             strncpy(device, argv[++i], sizeof(device) - 1);
+            device[sizeof(device) - 1] = '\0';
             mode = VDE_MODE_LIVE;
-        } else if (strcmp(argv[i], "-r") == 0 && i + 1 < argc) {
+        } else if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
+            /* -p <pcap文件>：OFFLINE 离线模式 */
             strncpy(device, argv[++i], sizeof(device) - 1);
+            device[sizeof(device) - 1] = '\0';
             mode = VDE_MODE_OFFLINE;
-        } else if (strcmp(argv[i], "-d") == 0 && i + 1 < argc) {
+        } else if (strcmp(argv[i], "-r") == 0 && i + 1 < argc) {
+            /* -r <规则库路径> */
             strncpy(rule_db, argv[++i], sizeof(rule_db) - 1);
+            rule_db[sizeof(rule_db) - 1] = '\0';
         } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            /* -o <日志目录> */
             strncpy(log_dir, argv[++i], sizeof(log_dir) - 1);
+            log_dir[sizeof(log_dir) - 1] = '\0';
         } else if (strcmp(argv[i], "-f") == 0 && i + 1 < argc) {
+            /* -f <BPF过滤表达式> */
             strncpy(bpf_filter, argv[++i], sizeof(bpf_filter) - 1);
+            bpf_filter[sizeof(bpf_filter) - 1] = '\0';
         } else if (strcmp(argv[i], "-v") == 0) {
             verbose = 1;
         } else if (strcmp(argv[i], "-s") == 0) {
             show_stats = 1;
+        } else {
+            fprintf(stderr, "未知参数: %s（使用 -h 查看帮助）\n", argv[i]);
         }
     }
 
@@ -219,7 +239,8 @@ int main(int argc, char* argv[])
     }
 
     if (device[0] == '\0') {
-        fprintf(stderr, "错误：未指定网络接口或pcap文件。使用 -l 查看可用接口，-h 查看帮助。\n");
+        fprintf(stderr, "错误：未指定网络接口（-i）或 pcap 文件（-p）。\n"
+                        "      使用 -l 查看可用接口，-h 查看帮助。\n");
         return 1;
     }
 
@@ -230,18 +251,22 @@ int main(int argc, char* argv[])
     /* 构建配置 */
     VDE_Config config;
     memset(&config, 0, sizeof(config));
-    config.mode              = mode;
-    config.promiscuous       = 1;
-    config.snaplen           = 65535;
-    config.read_timeout_ms   = 500;
-    config.log_level         = verbose ? 4 : 3; /* DEBUG or INFO */
-    config.alert_callback    = on_alert;
+    config.mode               = mode;
+    config.promiscuous        = 1;
+    config.snaplen            = 65535;
+    config.read_timeout_ms    = 500;
+    config.log_level          = verbose ? 4 : 3; /* DEBUG(4) or INFO(3) */
+    config.alert_callback     = on_alert;
     config.alert_callback_ctx = NULL;
 
-    strncpy(config.device_name, device,     sizeof(config.device_name) - 1);
-    strncpy(config.rule_db_path, rule_db,   sizeof(config.rule_db_path) - 1);
-    strncpy(config.log_dir,      log_dir,   sizeof(config.log_dir) - 1);
-    strncpy(config.bpf_filter,   bpf_filter, sizeof(config.bpf_filter) - 1);
+    strncpy(config.device_name,  device,     sizeof(config.device_name)  - 1);
+    strncpy(config.rule_db_path, rule_db,    sizeof(config.rule_db_path) - 1);
+    strncpy(config.log_dir,      log_dir,    sizeof(config.log_dir)      - 1);
+    strncpy(config.bpf_filter,   bpf_filter, sizeof(config.bpf_filter)   - 1);
+
+    printf("模式     : %s\n", mode == VDE_MODE_LIVE ? "LIVE（实时抓包）" : "OFFLINE（离线分析）");
+    printf("设备/文件: %s\n", device);
+    printf("规则库   : %s\n\n", rule_db);
 
     /* 创建引擎实例 */
     VDE_ErrorCode ret = VDE_Create(&config, &g_handle);

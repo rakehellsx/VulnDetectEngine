@@ -1,10 +1,25 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  VulnDetectEngine — DetectEngine DLL 工程文件
+  目标：VS2017 / Windows x86 & x64 / Debug & Release
+
+  编译前置步骤：
+  1. 安装 Npcap (https://npcap.com/#download)
+  2. 下载 Npcap SDK，解压到 ..\third_party\npcap-sdk\
+       third_party\npcap-sdk\Include\  (pcap.h 等)
+       third_party\npcap-sdk\Lib\      (wpcap.lib / Packet.lib, 32位)
+       third_party\npcap-sdk\Lib\x64\ (wpcap.lib / Packet.lib, 64位)
+  3. [可选] PCRE2 完整正则支持：
+       下载 https://github.com/PCRE2Project/pcre2/releases
+       解压到 ..\third_party\pcre2\
+       在项目属性 -> 预处理定义中添加 VDE_USE_PCRE2
+       附加包含目录添加 $(SolutionDir)third_party\pcre2\include
+       附加库目录添加 $(SolutionDir)third_party\pcre2\lib
+       附加依赖项添加 pcre2-8-static.lib
+-->
 <Project DefaultTargets="Build" ToolsVersion="15.0"
          xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
 
-  <!-- ======================================================
-       平台配置
-  ====================================================== -->
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
       <Configuration>Debug</Configuration>
@@ -24,22 +39,18 @@
     </ProjectConfiguration>
   </ItemGroup>
 
-  <!-- ======================================================
-       全局属性
-  ====================================================== -->
   <PropertyGroup Label="Globals">
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
     <RootNamespace>DetectEngine</RootNamespace>
     <WindowsTargetPlatformVersion>10.0.17763.0</WindowsTargetPlatformVersion>
-    <!-- Npcap SDK 路径：请修改为实际安装路径 -->
-    <NpcapSDKDir>$(SolutionDir)third_party\npcap-sdk\</NpcapSDKDir>
+    <!-- Npcap SDK 根目录（可通过环境变量 NPCAP_SDK 覆盖） -->
+    <NpcapSDKDir Condition="'$(NpcapSDKDir)'==''">$(SolutionDir)third_party\npcap-sdk\</NpcapSDKDir>
+    <!-- PCRE2 根目录（可选，开启完整正则支持） -->
+    <Pcre2Dir Condition="'$(Pcre2Dir)'==''">$(SolutionDir)third_party\pcre2\</Pcre2Dir>
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
 
-  <!-- ======================================================
-       配置属性
-  ====================================================== -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
@@ -69,25 +80,33 @@
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
 
-  <!-- ======================================================
-       编译器与链接器设置
-  ====================================================== -->
+  <!-- 输出目录 -->
+  <PropertyGroup Condition="'$(Platform)'=='Win32'">
+    <OutDir>$(SolutionDir)bin\Win32\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)build\Win32\$(Configuration)\DetectEngine\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Platform)'=='x64'">
+    <OutDir>$(SolutionDir)bin\x64\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)build\x64\$(Configuration)\DetectEngine\</IntDir>
+  </PropertyGroup>
 
   <!-- Debug Win32 -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;VULNDETECT_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <SDLCheck>false</SDLCheck>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;VDE_EXPORTS;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(NpcapSDKDir)Include;$(ProjectDir)include;$(ProjectDir)third_party\cJSON;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <DisableSpecificWarnings>4996;4244;4267;4018;4100;4127</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(NpcapSDKDir)Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>wpcap.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>wpcap.lib;Packet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ModuleDefinitionFile>$(ProjectDir)DetectEngine.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
 
@@ -98,17 +117,19 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;VULNDETECT_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <SDLCheck>false</SDLCheck>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;VDE_EXPORTS;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(NpcapSDKDir)Include;$(ProjectDir)include;$(ProjectDir)third_party\cJSON;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <DisableSpecificWarnings>4996;4244;4267;4018;4100;4127</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalLibraryDirectories>$(NpcapSDKDir)Lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>wpcap.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>wpcap.lib;Packet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ModuleDefinitionFile>$(ProjectDir)DetectEngine.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
 
@@ -117,16 +138,18 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_WINDOWS;_USRDLL;VULNDETECT_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <SDLCheck>false</SDLCheck>
+      <PreprocessorDefinitions>_WIN64;_DEBUG;_WINDOWS;_USRDLL;VDE_EXPORTS;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(NpcapSDKDir)Include;$(ProjectDir)include;$(ProjectDir)third_party\cJSON;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <DisableSpecificWarnings>4996;4244;4267;4018;4100;4127</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(NpcapSDKDir)Lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>wpcap.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>wpcap.lib;Packet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ModuleDefinitionFile>$(ProjectDir)DetectEngine.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
 
@@ -137,23 +160,23 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_WINDOWS;_USRDLL;VULNDETECT_EXPORTS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <SDLCheck>false</SDLCheck>
+      <PreprocessorDefinitions>_WIN64;NDEBUG;_WINDOWS;_USRDLL;VDE_EXPORTS;_CRT_SECURE_NO_WARNINGS;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalIncludeDirectories>$(NpcapSDKDir)Include;$(ProjectDir)include;$(ProjectDir)third_party\cJSON;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <DisableSpecificWarnings>4996;4244;4267;4018;4100;4127</DisableSpecificWarnings>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalLibraryDirectories>$(NpcapSDKDir)Lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>wpcap.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>wpcap.lib;Packet.lib;ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <ModuleDefinitionFile>$(ProjectDir)DetectEngine.def</ModuleDefinitionFile>
     </Link>
   </ItemDefinitionGroup>
 
-  <!-- ======================================================
-       源文件
-  ====================================================== -->
+  <!-- 源文件 -->
   <ItemGroup>
     <ClCompile Include="src\dllmain.c" />
     <ClCompile Include="src\engine_core.c" />
@@ -163,9 +186,7 @@
     <ClCompile Include="third_party\cJSON\cJSON.c" />
   </ItemGroup>
 
-  <!-- ======================================================
-       头文件
-  ====================================================== -->
+  <!-- 头文件 -->
   <ItemGroup>
     <ClInclude Include="include\VulnDetectEngine.h" />
     <ClInclude Include="include\proto_parser.h" />
@@ -174,11 +195,14 @@
     <ClInclude Include="third_party\cJSON\cJSON.h" />
   </ItemGroup>
 
-  <!-- ======================================================
-       资源文件（版本信息）
-  ====================================================== -->
+  <!-- 资源文件 -->
   <ItemGroup>
     <ResourceCompile Include="DetectEngine.rc" />
+  </ItemGroup>
+
+  <!-- DEF 文件（导出符号定义） -->
+  <ItemGroup>
+    <None Include="DetectEngine.def" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

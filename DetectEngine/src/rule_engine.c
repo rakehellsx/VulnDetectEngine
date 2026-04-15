@@ -8,6 +8,13 @@
  *          - 阈值滑动窗口计数
  */
 
+#ifdef _WIN32
+#  define _CRT_SECURE_NO_WARNINGS
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#endif
+
 #include "../include/rule_engine.h"
 #include "../third_party/cJSON/cJSON.h"
 #include <stdio.h>
@@ -18,9 +25,38 @@
 
 #ifdef _WIN32
 #  include <windows.h>
-/* Windows 下使用系统正则（通过 PCRE 或简单手写匹配）
- * 为保持零外部依赖，此处实现一个轻量级通配/子串匹配，
- * 完整正则支持可替换为 PCRE2 库。                      */
+/* =========================================================
+ *  Windows 平台兼容函数
+ * ========================================================= */
+static int vde_strcasecmp(const char* a, const char* b)
+    { return _stricmp(a, b); }
+static int vde_strncasecmp(const char* a, const char* b, size_t n)
+    { return _strnicmp(a, b, n); }
+static const char* vde_strcasestr(const char* h, const char* n)
+{
+    if (!h || !n) return NULL;
+    size_t nl = strlen(n);
+    if (!nl) return h;
+    for (; *h; h++) if (_strnicmp(h, n, nl) == 0) return h;
+    return NULL;
+}
+#  define strcasecmp(a,b)    vde_strcasecmp(a,b)
+#  define strncasecmp(a,b,n) vde_strncasecmp(a,b,n)
+#  define strcasestr(h,n)    vde_strcasestr(h,n)
+/* =========================================================
+ *  Windows 正则匹配策略：
+ *    默认回退为大小写不敏感子串搜索。
+ *    如需完整 POSIX 正则，定义 VDE_USE_PCRE2 并引入 PCRE2 库：
+ *      1. 下载: https://github.com/PCRE2Project/pcre2/releases
+ *      2. 解压到 third_party\pcre2\
+ *      3. 项目属性 -> 附加包含: third_party\pcre2\include
+ *      4. 项目属性 -> 附加库: third_party\pcre2\lib\pcre2-8-static.lib
+ *      5. 预处理定义: VDE_USE_PCRE2
+ * ========================================================= */
+#  ifdef VDE_USE_PCRE2
+#    define PCRE2_CODE_UNIT_WIDTH 8
+#    include <pcre2.h>
+#  endif
 #else
 #  include <regex.h>
 #endif
@@ -722,8 +758,7 @@ static int eval_condition(const RuleCondition* cond, const ParsedPacket* pkt)
             return strcasestr(field_val, cond->value) != NULL;
         case OP_REGEX: {
 #ifndef _WIN32
-            /* POSIX 扩展正则（Linux/macOS 内置，零依赖）
-             * 注意：POSIX ERE 不支持 (?i) 内联标志，需先去除 */
+            /* Linux/macOS: POSIX 扩展正则（内置，零依赖） */
             const char* pat = cond->value;
             char pat_buf[2048];
             /* 去除 (?i) 或 (?-i) 前缀（已用 REG_ICASE 全局设置） */
@@ -732,12 +767,12 @@ static int eval_condition(const RuleCondition* cond, const ParsedPacket* pkt)
             } else if (pat[0] == '(' && pat[1] == '?' && pat[2] == '-' && pat[3] == 'i' && pat[4] == ')') {
                 pat = pat + 5;
             }
-            /* 将 \s 替换为 [[:space:]] （POSIX 兼容） */
+            /* 将 \s/\d/\w 转换为 POSIX 字符类 */
             {
                 const char* src = pat;
                 char* dst = pat_buf;
-                char* end = pat_buf + sizeof(pat_buf) - 4;
-                while (*src && dst < end) {
+                char* end_buf = pat_buf + sizeof(pat_buf) - 4;
+                while (*src && dst < end_buf) {
                     if (src[0] == '\\' && src[1] == 's') {
                         memcpy(dst, "[[:space:]]", 11); dst += 11; src += 2;
                     } else if (src[0] == '\\' && src[1] == 'S') {
@@ -756,15 +791,35 @@ static int eval_condition(const RuleCondition* cond, const ParsedPacket* pkt)
             regex_t re;
             int rflags = REG_EXTENDED | REG_ICASE | REG_NOSUB;
             if (regcomp(&re, pat, rflags) != 0) {
-                /* 正则编译失败时回退为子串搜索 */
                 return strcasestr(field_val, cond->value) != NULL;
             }
             int matched = (regexec(&re, field_val, 0, NULL, 0) == 0);
             regfree(&re);
             return matched;
 #else
+            /* Windows: 优先使用 PCRE2（定义 VDE_USE_PCRE2 时生效） */
+#  ifdef VDE_USE_PCRE2
+            {
+                int errcode;
+                PCRE2_SIZE erroffset;
+                /* 去除 (?i) 前缀 */
+                const char* pat2 = cond->value;
+                if (pat2[0]=='('&&pat2[1]=='?'&&pat2[2]=='i'&&pat2[3]==')') pat2+=4;
+                pcre2_code* re2 = pcre2_compile(
+                    (PCRE2_SPTR)pat2, PCRE2_ZERO_TERMINATED,
+                    PCRE2_CASELESS | PCRE2_UTF, &errcode, &erroffset, NULL);
+                if (!re2) return strcasestr(field_val, cond->value) != NULL;
+                pcre2_match_data* md = pcre2_match_data_create_from_pattern(re2, NULL);
+                int rc = pcre2_match(re2, (PCRE2_SPTR)field_val,
+                                     strlen(field_val), 0, 0, md, NULL);
+                pcre2_match_data_free(md);
+                pcre2_code_free(re2);
+                return rc >= 0;
+            }
+#  else
             /* Windows 回退：大小写不敏感子串搜索 */
             return strcasestr(field_val, cond->value) != NULL;
+#  endif
 #endif
         }
         case OP_HEX_MATCH:

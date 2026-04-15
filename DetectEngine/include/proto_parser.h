@@ -31,12 +31,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-/* nDPI 头文件 */
-#ifdef _WIN32
-#  include "ndpi/ndpi_api.h"
-#  include "ndpi/ndpi_protocol_ids.h"
-#  include "ndpi/ndpi_typedefs.h"
-#else
+/* nDPI 头文件（仅 Linux/macOS；Windows 使用内置协议解析器，无需 nDPI） */
+#ifndef _WIN32
 #  include <ndpi/ndpi_api.h>
 #  include <ndpi/ndpi_protocol_ids.h>
 #  include <ndpi/ndpi_typedefs.h>
@@ -266,19 +262,32 @@ typedef struct ParsedPacket {
 } ParsedPacket;
 
 /* =========================================================
- *  nDPI 引擎上下文（每个 VDE 实例持有一个）
+ *  协议解析引擎上下文（跨平台抽象）
+ *  Linux  : ndpi_struct 指向真实的 nDPI 模块
+ *  Windows: ndpi_struct 为 NULL，使用内置轻量解析器
  * ========================================================= */
 typedef struct NdpiContext {
+#ifndef _WIN32
     struct ndpi_detection_module_struct* ndpi_struct;
+#else
+    void*  ndpi_struct;   /* 占位，Windows 下始终为 NULL */
+#endif
 } NdpiContext;
 
 /* =========================================================
- *  nDPI 单流上下文（每条 TCP/UDP 流持有一个）
+ *  单流上下文（跨平台抽象）
  * ========================================================= */
 typedef struct NdpiFlowCtx {
+#ifndef _WIN32
     struct ndpi_flow_struct* flow;
     uint8_t                  detection_completed;
     ndpi_protocol            detected_proto;
+#else
+    void*    flow;           /* 占位，Windows 下始终为 NULL */
+    uint8_t  detection_completed;
+    uint16_t proto_master;
+    uint16_t proto_app;
+#endif
 } NdpiFlowCtx;
 
 /* =========================================================

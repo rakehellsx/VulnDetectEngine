@@ -1,0 +1,15 @@
+; VulnDetectEngine DLL 导出符号定义
+; 用于 Windows 链接器，确保所有公共 API 正确导出
+
+LIBRARY "DetectEngine"
+
+EXPORTS
+    VDE_Create
+    VDE_Destroy
+    VDE_Start
+    VDE_Stop
+    VDE_ReloadRules
+    VDE_SetRuleEnabled
+    VDE_GetRules
+    VDE_GetStatistics
+    VDE_EnumDevices
