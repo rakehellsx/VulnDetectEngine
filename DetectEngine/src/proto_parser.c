@@ -1,14 +1,18 @@
 /**
  * @file    proto_parser.c
- * @brief   协议解析层实现
- *          支持：以太网 / IPv4 / TCP / UDP / ICMP / DNS / SMB1 / SMB2 / SMBv3压缩 /
- *                HTTP / RDP(TPKT) / DCERPC / NetBIOS Session Service
+ * @brief   协议解析层实现 —— 基于 nDPI 深度包检测
+ *
+ * 架构：
+ *   1. Ethernet/IP/TCP/UDP/ICMP 底层解析（自研轻量实现）
+ *   2. 应用层协议识别：nDPI 4.x（200+ 协议精准分类）
+ *   3. 关键字段提取：SMB/HTTP/DNS/RDP/DCERPC/Kerberos 字段级解析
  */
 
+#define _GNU_SOURCE
 #include "../include/proto_parser.h"
 #include <string.h>
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <ctype.h>
 
 #ifdef _WIN32
@@ -18,332 +22,390 @@
 #endif
 
 /* =========================================================
- *  内部辅助宏
+ *  工具宏
  * ========================================================= */
-#define SAFE_STRNCPY(dst, src, n) \
-    do { strncpy((dst), (src), (n)-1); (dst)[(n)-1] = '\0'; } while(0)
+#define SAFE_COPY(dst, src, sz) do { \
+    if ((src) != NULL && (src)[0] != '\0') { \
+        strncpy((dst), (src), (sz)-1); \
+        (dst)[(sz)-1] = '\0'; \
+    } \
+} while(0)
+#define SAFE_COPY_STR(dst, src, sz) do { \
+    const char* _s = (src); \
+    if (_s && _s[0]) { strncpy((dst), _s, (sz)-1); (dst)[(sz)-1] = '\0'; } \
+} while(0)
 
-#define BOUNDS_CHECK(ptr, end, size) \
-    ((ptr) + (size) <= (end))
+#define MIN2(a,b) ((a)<(b)?(a):(b))
 
 /* =========================================================
- *  IP 地址转字符串
+ *  PP_IpToStr
  * ========================================================= */
 void PP_IpToStr(uint32_t ip_net, char* buf, size_t buf_len)
 {
-    uint32_t ip_host = ntohl(ip_net);
-    snprintf(buf, buf_len, "%u.%u.%u.%u",
-        (ip_host >> 24) & 0xFF,
-        (ip_host >> 16) & 0xFF,
-        (ip_host >>  8) & 0xFF,
-        (ip_host      ) & 0xFF);
+    if (!buf || buf_len < 16) return;
+    uint8_t* b = (uint8_t*)&ip_net;
+    snprintf(buf, buf_len, "%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
 }
 
 /* =========================================================
- *  十六进制字符串转字节序列（用于 HEX_MATCH 条件预处理）
+ *  PP_Init — 初始化 nDPI 检测模块
  * ========================================================= */
-static int hex_str_to_bytes(const char* hex, uint8_t* out, int max_len)
+int PP_Init(NdpiContext* ctx)
 {
-    int len = 0;
-    const char* p = hex;
-    while (*p && *(p+1) && len < max_len) {
-        char byte_str[3] = { *p, *(p+1), '\0' };
-        out[len++] = (uint8_t)strtol(byte_str, NULL, 16);
-        p += 2;
+    if (!ctx) return -1;
+    memset(ctx, 0, sizeof(NdpiContext));
+
+    ctx->ndpi_struct = ndpi_init_detection_module(ndpi_no_prefs);
+    if (!ctx->ndpi_struct) {
+        fprintf(stderr, "[proto_parser] ndpi_init_detection_module 失败\n");
+        return -1;
     }
-    return len;
+
+    NDPI_PROTOCOL_BITMASK all;
+    NDPI_BITMASK_SET_ALL(all);
+    ndpi_set_protocol_detection_bitmask2(ctx->ndpi_struct, &all);
+    ndpi_finalize_initialization(ctx->ndpi_struct);
+
+    fprintf(stderr, "[proto_parser] nDPI %s 初始化成功，支持 %u 个协议\n",
+            ndpi_revision(),
+            ndpi_get_num_supported_protocols(ctx->ndpi_struct));
+    return 0;
 }
 
 /* =========================================================
- *  SMB 解析
+ *  PP_Destroy
  * ========================================================= */
-int PP_ParseSMB(ParsedPacket* pkt)
+void PP_Destroy(NdpiContext* ctx)
+{
+    if (!ctx) return;
+    if (ctx->ndpi_struct) {
+        ndpi_exit_detection_module(ctx->ndpi_struct);
+        ctx->ndpi_struct = NULL;
+    }
+}
+
+/* =========================================================
+ *  PP_FlowCreate / PP_FlowDestroy
+ * ========================================================= */
+NdpiFlowCtx* PP_FlowCreate(void)
+{
+    NdpiFlowCtx* fctx = (NdpiFlowCtx*)calloc(1, sizeof(NdpiFlowCtx));
+    if (!fctx) return NULL;
+    fctx->flow = (struct ndpi_flow_struct*)calloc(1, sizeof(struct ndpi_flow_struct));
+    if (!fctx->flow) { free(fctx); return NULL; }
+    return fctx;
+}
+
+void PP_FlowDestroy(NdpiFlowCtx* fctx)
+{
+    if (!fctx) return;
+    if (fctx->flow) {
+        ndpi_free_flow_data(fctx->flow);
+        free(fctx->flow);
+        fctx->flow = NULL;
+    }
+    free(fctx);
+}
+
+/* =========================================================
+ *  内部：SMB 字段细粒度解析
+ * ========================================================= */
+static void parse_smb_fields(ParsedPacket* pkt)
 {
     const uint8_t* data = pkt->payload;
     uint32_t       len  = pkt->payload_len;
-    const uint8_t* end  = data + len;
+    if (!data || len < 8) return;
 
-    if (!data || len < 4) return 0;
-
-    /* 跳过 NetBIOS Session Service 头（4字节） */
-    const uint8_t* smb_start = data;
+    const uint8_t* smb = data;
     if (len >= 4 && data[0] == 0x00) {
-        /* NBSS header */
-        smb_start = data + 4;
-        if (smb_start >= end) return 0;
+        if (len <= 4) return;
+        smb = data + 4;
+        len -= 4;
     }
+    if (len < 4) return;
 
-    uint32_t magic = 0;
-    if ((size_t)(end - smb_start) >= 4) {
-        magic = ((uint32_t)smb_start[0] << 24) |
-                ((uint32_t)smb_start[1] << 16) |
-                ((uint32_t)smb_start[2] <<  8) |
-                 (uint32_t)smb_start[3];
-    }
+    uint32_t magic = ((uint32_t)smb[0] << 24) | ((uint32_t)smb[1] << 16) |
+                     ((uint32_t)smb[2] <<  8) |  (uint32_t)smb[3];
 
-    if (magic == SMB1_MAGIC) {
-        /* SMBv1 */
-        pkt->app_proto = PROTO_SMB1;
-        pkt->smb_version = 1;
-        if ((size_t)(end - smb_start) >= sizeof(Smb1Header)) {
-            const Smb1Header* hdr = (const Smb1Header*)smb_start;
-            pkt->smb_command = hdr->command;
-            pkt->smb_status  = ntohl(hdr->status);
-            pkt->smb_flags2  = ntohs(hdr->flags2);
-            pkt->smb_fid     = 0;
-        }
-    } else if (magic == SMB2_MAGIC) {
-        /* SMBv2/3 */
-        pkt->app_proto = PROTO_SMB2;
-        pkt->smb_version = 2;
-        if ((size_t)(end - smb_start) >= sizeof(Smb2Header)) {
-            const Smb2Header* hdr = (const Smb2Header*)smb_start;
-            pkt->smb_command = (uint8_t)(ntohs(hdr->command) & 0xFF);
-            pkt->smb_status  = ntohl(hdr->status);
-            pkt->smb_compression = 0;
-        }
+    if (magic == SMB1_MAGIC && len >= sizeof(Smb1Header)) {
+        const Smb1Header* h = (const Smb1Header*)smb;
+        pkt->smb_version  = 1;
+        pkt->smb_command  = h->command;
+        pkt->smb_status   = ntohl(h->status);
+        pkt->smb_flags2   = ntohs(h->flags2);
+        pkt->app_proto    = PROTO_SMB1;
+    } else if (magic == SMB2_MAGIC && len >= sizeof(Smb2Header)) {
+        const Smb2Header* h = (const Smb2Header*)smb;
+        pkt->smb_version  = 2;
+        pkt->smb_command  = (uint8_t)(ntohs(h->command) & 0xFF);
+        pkt->smb_status   = ntohl(h->status);
+        pkt->app_proto    = PROTO_SMB2;
     } else if (magic == SMB3_COMPRESS) {
-        /* SMBv3 压缩包 */
-        pkt->app_proto = PROTO_SMB3_COMPRESS;
-        pkt->smb_version = 3;
+        pkt->smb_version     = 3;
         pkt->smb_compression = 1;
-    } else {
-        return 0;
+        pkt->app_proto       = PROTO_SMB3_COMPRESS;
     }
-    return 1;
 }
 
 /* =========================================================
- *  HTTP 解析（仅解析请求行 + 常用请求头）
+ *  内部：HTTP 字段细粒度解析（nDPI + 自研补充）
  * ========================================================= */
-int PP_ParseHTTP(ParsedPacket* pkt)
+static void parse_http_fields(ParsedPacket* pkt,
+                               struct ndpi_flow_struct* flow)
 {
-    const uint8_t* data = pkt->payload;
-    uint32_t       len  = pkt->payload_len;
+    /* nDPI 提供的字段 */
+    if (flow) {
+        if (flow->http.method != NDPI_HTTP_METHOD_UNKNOWN) {
+            const char* methods[] = {
+                "UNKNOWN","OPTIONS","GET","HEAD","POST","PUT",
+                "DELETE","TRACE","CONNECT","PATCH"
+            };
+            int m = (int)flow->http.method;
+            if (m >= 0 && m < 10)
+                SAFE_COPY(pkt->http_method, methods[m], sizeof(pkt->http_method));
+        }
+        if (flow->http.url)
+            SAFE_COPY(pkt->http_uri, flow->http.url, sizeof(pkt->http_uri));
+        if (flow->http.user_agent)
+            SAFE_COPY(pkt->http_user_agent, flow->http.user_agent,
+                      sizeof(pkt->http_user_agent));
+    }
 
-    if (!data || len < 16) return 0;
+    /* 从原始载荷补充解析 */
+    const uint8_t* p   = pkt->payload;
+    uint32_t       len = pkt->payload_len;
+    if (!p || len < 8) return;
 
-    /* 判断是否为 HTTP 请求 */
-    const char* methods[] = { "GET ", "POST ", "PUT ", "DELETE ",
-                               "HEAD ", "OPTIONS ", "PATCH ", "CONNECT ", NULL };
-    int is_http = 0;
-    for (int i = 0; methods[i]; i++) {
-        if (strncmp((const char*)data, methods[i], strlen(methods[i])) == 0) {
-            is_http = 1;
-            SAFE_STRNCPY(pkt->http_method, methods[i], sizeof(pkt->http_method));
-            /* 去掉末尾空格 */
-            size_t ml = strlen(pkt->http_method);
-            if (ml > 0 && pkt->http_method[ml-1] == ' ')
-                pkt->http_method[ml-1] = '\0';
+    uint32_t rlen = MIN2(len, (uint32_t)(PP_MAX_HTTP_HDR - 1));
+    memcpy(pkt->http_headers, (const char*)p, rlen);
+    pkt->http_headers[rlen] = '\0';
+
+    /* 提取 Host */
+    const char* host_hdr = strcasestr(pkt->http_headers, "\r\nHost:");
+    if (!host_hdr) host_hdr = strcasestr(pkt->http_headers, "\nHost:");
+    if (host_hdr) {
+        host_hdr = strchr(host_hdr, ':') + 1;
+        while (*host_hdr == ' ') host_hdr++;
+        const char* end2 = strpbrk(host_hdr, "\r\n");
+        if (end2) {
+            size_t hlen = MIN2((size_t)(end2 - host_hdr), sizeof(pkt->http_host)-1);
+            memcpy(pkt->http_host, host_hdr, hlen);
+            pkt->http_host[hlen] = '\0';
+        }
+    }
+
+    /* 提取 Cookie */
+    const char* ck = strcasestr(pkt->http_headers, "\r\nCookie:");
+    if (!ck) ck = strcasestr(pkt->http_headers, "\nCookie:");
+    if (ck) {
+        ck = strchr(ck, ':') + 1;
+        while (*ck == ' ') ck++;
+        const char* end2 = strpbrk(ck, "\r\n");
+        if (end2) {
+            size_t clen = MIN2((size_t)(end2 - ck), sizeof(pkt->http_cookie)-1);
+            memcpy(pkt->http_cookie, ck, clen);
+            pkt->http_cookie[clen] = '\0';
+        }
+    }
+
+    /* 若 nDPI 未提取到 URI，从请求行提取 */
+    if (pkt->http_uri[0] == '\0') {
+        const char* raw = (const char*)p;
+        const char* sp1 = strchr(raw, ' ');
+        if (sp1) {
+            sp1++;
+            const char* sp2 = strchr(sp1, ' ');
+            if (sp2) {
+                size_t ulen = MIN2((size_t)(sp2 - sp1), sizeof(pkt->http_uri)-1);
+                memcpy(pkt->http_uri, sp1, ulen);
+                pkt->http_uri[ulen] = '\0';
+            }
+        }
+    }
+
+    /* 若 nDPI 未提取到 method，从请求行提取 */
+    if (pkt->http_method[0] == '\0') {
+        const char* raw = (const char*)p;
+        const char* sp = strchr(raw, ' ');
+        if (sp) {
+            size_t mlen = MIN2((size_t)(sp - raw), sizeof(pkt->http_method)-1);
+            memcpy(pkt->http_method, raw, mlen);
+            pkt->http_method[mlen] = '\0';
+        }
+    }
+}
+
+/* =========================================================
+ *  内部：DNS 字段细粒度解析
+ * ========================================================= */
+static void parse_dns_fields(ParsedPacket* pkt,
+                              struct ndpi_flow_struct* flow)
+{
+    if (flow && flow->protos.dns.num_queries > 0) {
+        pkt->dns_qtype = flow->protos.dns.query_type;
+    }
+
+    const uint8_t* p   = pkt->payload;
+    uint32_t       len = pkt->payload_len;
+    if (!p || len < 13) return;
+
+    uint16_t qdcount = (uint16_t)((p[4] << 8) | p[5]);
+    if (qdcount == 0) return;
+
+    const uint8_t* ptr = p + 12;
+    const uint8_t* end = p + len;
+    char name[PP_MAX_DNS_NAME];
+    int  npos = 0;
+    int  first = 1;
+
+    while (ptr < end && *ptr != 0 && npos < (int)sizeof(name) - 2) {
+        uint8_t label_len = *ptr++;
+        if ((label_len & 0xC0) == 0xC0) break;
+        if (ptr + label_len > end) break;
+        if (!first) name[npos++] = '.';
+        first = 0;
+        int copy_len = (int)MIN2((uint32_t)label_len,
+                                  (uint32_t)(sizeof(name) - npos - 2));
+        memcpy(name + npos, ptr, copy_len);
+        npos += copy_len;
+        ptr  += label_len;
+    }
+    name[npos] = '\0';
+    if (npos > 0)
+        SAFE_COPY(pkt->dns_query, name, sizeof(pkt->dns_query));
+
+    if (ptr + 2 < end) {
+        ptr++;
+        pkt->dns_qtype = (uint16_t)((ptr[0] << 8) | ptr[1]);
+    }
+}
+
+/* =========================================================
+ *  内部：RDP 字段细粒度解析
+ * ========================================================= */
+static void parse_rdp_fields(ParsedPacket* pkt)
+{
+    const uint8_t* p   = pkt->payload;
+    uint32_t       len = pkt->payload_len;
+    if (!p || len < 8) return;
+    if (p[0] != 0x03) return;
+
+    uint8_t cotp_type = (len >= 6) ? p[5] : 0;
+    pkt->rdp_pdu_type = cotp_type;
+
+    const char* channels[] = { "MS_T120", "rdpdr", "rdpsnd", "cliprdr", NULL };
+    for (int i = 0; channels[i]; i++) {
+        size_t clen = strlen(channels[i]);
+        if (len > clen && memmem(p, len, channels[i], clen)) {
+            SAFE_COPY(pkt->rdp_channel, channels[i], sizeof(pkt->rdp_channel));
             break;
         }
     }
-    if (!is_http) return 0;
-
-    pkt->app_proto = PROTO_HTTP;
-
-    /* 解析请求行：METHOD URI HTTP/x.x */
-    const char* line_start = (const char*)data;
-    const char* line_end   = (const char*)memchr(data, '\n', len);
-    if (!line_end) return 1;
-
-    /* 提取 URI */
-    const char* uri_start = strchr(line_start, ' ');
-    if (uri_start) {
-        uri_start++;
-        const char* uri_end = strchr(uri_start, ' ');
-        if (!uri_end) uri_end = line_end;
-        size_t uri_len = (size_t)(uri_end - uri_start);
-        if (uri_len >= sizeof(pkt->http_uri)) uri_len = sizeof(pkt->http_uri) - 1;
-        memcpy(pkt->http_uri, uri_start, uri_len);
-        pkt->http_uri[uri_len] = '\0';
-    }
-
-    /* 解析请求头 */
-    const char* hdr_ptr = line_end + 1;
-    const char* data_end = (const char*)data + len;
-    size_t hdr_copied = 0;
-
-    while (hdr_ptr < data_end) {
-        const char* hdr_end = (const char*)memchr(hdr_ptr, '\n', data_end - hdr_ptr);
-        if (!hdr_end) break;
-        size_t hdr_line_len = (size_t)(hdr_end - hdr_ptr);
-        if (hdr_line_len <= 1) break; /* 空行 = 头部结束 */
-
-        /* 去掉 \r */
-        char hdr_line[512];
-        size_t copy_len = hdr_line_len < sizeof(hdr_line)-1 ? hdr_line_len : sizeof(hdr_line)-1;
-        memcpy(hdr_line, hdr_ptr, copy_len);
-        hdr_line[copy_len] = '\0';
-        if (copy_len > 0 && hdr_line[copy_len-1] == '\r')
-            hdr_line[copy_len-1] = '\0';
-
-        /* 提取 Host */
-        if (strncasecmp(hdr_line, "Host:", 5) == 0) {
-            const char* v = hdr_line + 5;
-            while (*v == ' ') v++;
-            SAFE_STRNCPY(pkt->http_host, v, sizeof(pkt->http_host));
-        }
-        /* 提取 Cookie */
-        if (strncasecmp(hdr_line, "Cookie:", 7) == 0) {
-            const char* v = hdr_line + 7;
-            while (*v == ' ') v++;
-            SAFE_STRNCPY(pkt->http_cookie, v, sizeof(pkt->http_cookie));
-        }
-
-        /* 追加到 http_headers */
-        size_t remain = sizeof(pkt->http_headers) - hdr_copied - 1;
-        if (remain > 0) {
-            size_t append_len = strlen(hdr_line);
-            if (append_len > remain) append_len = remain;
-            memcpy(pkt->http_headers + hdr_copied, hdr_line, append_len);
-            hdr_copied += append_len;
-            if (hdr_copied < sizeof(pkt->http_headers) - 2) {
-                pkt->http_headers[hdr_copied++] = '\n';
-            }
-        }
-
-        hdr_ptr = hdr_end + 1;
-    }
-    pkt->http_headers[hdr_copied] = '\0';
-
-    return 1;
 }
 
 /* =========================================================
- *  DNS 解析（仅解析查询域名）
+ *  内部：DCERPC 字段细粒度解析
  * ========================================================= */
-int PP_ParseDNS(ParsedPacket* pkt)
+static void parse_dcerpc_fields(ParsedPacket* pkt)
 {
-    const uint8_t* data = pkt->payload;
-    uint32_t       len  = pkt->payload_len;
+    const uint8_t* p   = pkt->payload;
+    uint32_t       len = pkt->payload_len;
+    if (!p || len < 24) return;
+    if (p[0] != 0x05) return;
 
-    /* DNS 最小头部 12 字节 */
-    if (!data || len < 12) return 0;
+    pkt->dcerpc_opnum = (uint16_t)(p[22] | ((uint16_t)p[23] << 8));
 
-    /* 仅处理标准查询（QR=0） */
-    uint16_t flags = (uint16_t)((data[2] << 8) | data[3]);
-    if (flags & 0x8000) return 0; /* 响应包跳过 */
-
-    uint16_t qdcount = (uint16_t)((data[4] << 8) | data[5]);
-    if (qdcount == 0) return 0;
-
-    pkt->app_proto = PROTO_DNS;
-
-    /* 解析第一个查询的域名 */
-    const uint8_t* ptr = data + 12;
-    const uint8_t* end = data + len;
-    char name[PP_MAX_DNS_NAME];
-    int  name_len = 0;
-    int  first    = 1;
-
-    while (ptr < end) {
-        uint8_t label_len = *ptr++;
-        if (label_len == 0) break;
-        if (label_len > 63 || ptr + label_len > end) break;
-
-        if (!first && name_len < PP_MAX_DNS_NAME - 1)
-            name[name_len++] = '.';
-        first = 0;
-
-        int copy = label_len;
-        if (name_len + copy >= PP_MAX_DNS_NAME)
-            copy = PP_MAX_DNS_NAME - name_len - 1;
-        memcpy(name + name_len, ptr, copy);
-        name_len += copy;
-        ptr += label_len;
-    }
-    name[name_len] = '\0';
-    SAFE_STRNCPY(pkt->dns_query, name, sizeof(pkt->dns_query));
-
-    /* 查询类型 */
-    if (ptr + 4 <= end) {
-        pkt->dns_qtype = (uint16_t)((ptr[0] << 8) | ptr[1]);
-    }
-
-    return 1;
-}
-
-/* =========================================================
- *  RDP 解析（TPKT + X.224 层）
- * ========================================================= */
-int PP_ParseRDP(ParsedPacket* pkt)
-{
-    const uint8_t* data = pkt->payload;
-    uint32_t       len  = pkt->payload_len;
-
-    /* TPKT: 0x03 0x00 len_hi len_lo */
-    if (!data || len < 4) return 0;
-    if (data[0] != 0x03 || data[1] != 0x00) return 0;
-
-    pkt->app_proto = PROTO_RDP;
-
-    /* X.224 Data TPDU (0xF0) 或 Connection Request (0xE0) */
-    if (len >= 5) {
-        uint8_t x224_type = data[4] & 0xF0;
-        pkt->rdp_pdu_type = x224_type;
-
-        /* 检测 MCS Connect Initial（含 GCC Conference Create Request）*/
-        /* 简单标记：在载荷中搜索 "MS_T120" 通道名 */
-        const char* ms_t120 = "MS_T120";
-        if (len > 10) {
-            const uint8_t* found = (const uint8_t*)memmem(data, len,
-                                    ms_t120, strlen(ms_t120));
-            if (found) {
-                SAFE_STRNCPY(pkt->rdp_channel, "MS_T120", sizeof(pkt->rdp_channel));
-            }
-        }
-    }
-
-    return 1;
-}
-
-/* =========================================================
- *  DCERPC 解析（提取 UUID 和 OpNum）
- * ========================================================= */
-int PP_ParseDCERPC(ParsedPacket* pkt)
-{
-    const uint8_t* data = pkt->payload;
-    uint32_t       len  = pkt->payload_len;
-
-    /* DCERPC 最小头部 16 字节，版本字段 = 0x05 */
-    if (!data || len < 16) return 0;
-    if (data[0] != 0x05) return 0; /* version */
-
-    pkt->app_proto = PROTO_DCERPC;
-
-    uint8_t pkt_type = data[2]; /* 0x0B=Bind, 0x00=Request */
-
-    if (pkt_type == 0x0B && len >= 60) {
-        /* Bind 包：提取接口 UUID（偏移44，16字节） */
-        const uint8_t* uuid_ptr = data + 44;
+    if (p[2] == 0x0B && len >= 60) {
+        const uint8_t* uuid = p + 44;
         snprintf(pkt->dcerpc_uuid, sizeof(pkt->dcerpc_uuid),
-            "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-            (uint32_t)(uuid_ptr[0] | (uuid_ptr[1]<<8) | (uuid_ptr[2]<<16) | (uuid_ptr[3]<<24)),
-            (uint16_t)(uuid_ptr[4] | (uuid_ptr[5]<<8)),
-            (uint16_t)(uuid_ptr[6] | (uuid_ptr[7]<<8)),
-            uuid_ptr[8], uuid_ptr[9],
-            uuid_ptr[10], uuid_ptr[11], uuid_ptr[12],
-            uuid_ptr[13], uuid_ptr[14], uuid_ptr[15]);
-    } else if (pkt_type == 0x00 && len >= 24) {
-        /* Request 包：OpNum 在偏移 22 */
-        pkt->dcerpc_opnum = (uint16_t)(data[22] | (data[23] << 8));
+                 "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+                 (unsigned)((uuid[3]<<24)|(uuid[2]<<16)|(uuid[1]<<8)|uuid[0]),
+                 (unsigned)((uuid[5]<<8)|uuid[4]),
+                 (unsigned)((uuid[7]<<8)|uuid[6]),
+                 uuid[8], uuid[9],
+                 uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15]);
     }
-
-    return 1;
 }
 
 /* =========================================================
- *  主解析入口
+ *  内部：Kerberos 字段提取（nDPI 提供）
+ * ========================================================= */
+static void parse_kerberos_fields(ParsedPacket* pkt,
+                                   struct ndpi_flow_struct* flow)
+{
+    if (!flow) return;
+    SAFE_COPY(pkt->kerb_hostname, flow->protos.kerberos.hostname,
+              sizeof(pkt->kerb_hostname));
+    SAFE_COPY(pkt->kerb_domain,   flow->protos.kerberos.domain,
+              sizeof(pkt->kerb_domain));
+    SAFE_COPY(pkt->kerb_username, flow->protos.kerberos.username,
+              sizeof(pkt->kerb_username));
+}
+
+/* =========================================================
+ *  内部：nDPI 协议 ID 映射到 ProtoType
+ * ========================================================= */
+static ProtoType ndpi_proto_to_type(uint16_t master, uint16_t sub)
+{
+    (void)sub;
+    switch (master) {
+        case NDPI_PROTOCOL_SMBV1:        return PROTO_SMB1;
+        case NDPI_PROTOCOL_SMBV23:       return PROTO_SMB2;
+        case NDPI_PROTOCOL_HTTP:
+        case NDPI_PROTOCOL_HTTP_CONNECT:
+        case NDPI_PROTOCOL_HTTP_PROXY:   return PROTO_HTTP;
+        case NDPI_PROTOCOL_DNS:
+        case NDPI_PROTOCOL_DNSCRYPT:     return PROTO_DNS;
+        case NDPI_PROTOCOL_RDP:          return PROTO_RDP;
+        case NDPI_PROTOCOL_DCERPC:       return PROTO_DCERPC;
+        case NDPI_PROTOCOL_NETBIOS:      return PROTO_NBSS;
+        case NDPI_PROTOCOL_KERBEROS:     return PROTO_KERBEROS;
+        default:                         return PROTO_UNKNOWN;
+    }
+}
+
+/* =========================================================
+ *  内部：按端口做基础协议推断（nDPI 未识别时的后备）
+ * ========================================================= */
+static void port_based_fallback(ParsedPacket* pkt,
+                                 struct ndpi_flow_struct* flow)
+{
+    uint16_t dp = pkt->dst_port, sp = pkt->src_port;
+    if ((dp == 445 || sp == 445 || dp == 139 || sp == 139)
+        && pkt->payload_len >= 4) {
+        parse_smb_fields(pkt);
+    } else if ((dp == 3389 || sp == 3389) && pkt->payload_len >= 4) {
+        pkt->app_proto = PROTO_RDP;
+        parse_rdp_fields(pkt);
+    } else if ((dp == 135 || sp == 135 || dp == 49152 || sp == 49152)
+               && pkt->payload_len >= 16) {
+        pkt->app_proto = PROTO_DCERPC;
+        parse_dcerpc_fields(pkt);
+    } else if ((dp == 53 || sp == 53) && pkt->payload_len >= 12) {
+        pkt->app_proto = PROTO_DNS;
+        parse_dns_fields(pkt, flow);
+    } else if ((dp == 80 || sp == 80 || dp == 8080 || sp == 8080 ||
+                dp == 443 || sp == 443 || dp == 8443 || sp == 8443)
+               && pkt->payload_len >= 8) {
+        pkt->app_proto = PROTO_HTTP;
+        parse_http_fields(pkt, flow);
+    } else if ((dp == 88 || sp == 88) && pkt->payload_len >= 8) {
+        pkt->app_proto = PROTO_KERBEROS;
+    }
+}
+
+/* =========================================================
+ *  PP_ParsePacket — 主入口
  * ========================================================= */
 int PP_ParsePacket(
+    NdpiContext*    ctx,
+    NdpiFlowCtx*    fctx,
     const uint8_t*  raw_data,
     uint32_t        raw_len,
     uint64_t        ts_us,
     ParsedPacket*   out_pkt)
 {
-    if (!raw_data || raw_len < sizeof(EthHeader) || !out_pkt) return 0;
-
+    if (!raw_data || raw_len < (uint32_t)sizeof(EthHeader) || !out_pkt) return 0;
     memset(out_pkt, 0, sizeof(ParsedPacket));
     out_pkt->timestamp_us = ts_us;
     out_pkt->raw_pkt      = raw_data;
@@ -360,90 +422,149 @@ int PP_ParsePacket(
     out_pkt->ether_type = ntohs(eth->ether_type);
     ptr += sizeof(EthHeader);
 
-    /* 处理 VLAN tag（802.1Q） */
     if (out_pkt->ether_type == ETHERTYPE_VLAN && ptr + 4 <= end) {
-        ptr += 2; /* TCI */
+        ptr += 2;
         out_pkt->ether_type = ntohs(*(uint16_t*)ptr);
         ptr += 2;
     }
-
-    if (out_pkt->ether_type != ETHERTYPE_IP) return 1; /* 仅处理 IPv4 */
+    if (out_pkt->ether_type != ETHERTYPE_IP) return 1;
 
     /* ---- IPv4 层 ---- */
-    if (ptr + sizeof(IPv4Header) > end) return 0;
+    if (ptr + (int)sizeof(IPv4Header) > end) return 0;
     const IPv4Header* ip = (const IPv4Header*)ptr;
-    uint8_t ihl = (ip->ver_ihl & 0x0F) * 4;
+    uint8_t ihl = (uint8_t)((ip->ver_ihl & 0x0F) * 4);
     if (ihl < 20 || ptr + ihl > end) return 0;
 
-    out_pkt->ip_proto    = ip->protocol;
-    out_pkt->ip_ttl      = ip->ttl;
+    out_pkt->ip_proto     = ip->protocol;
+    out_pkt->ip_ttl       = ip->ttl;
     out_pkt->ip_total_len = ntohs(ip->total_len);
-
-    /* 保存原始网络字节序 IP 地址 */
-    out_pkt->src_ip_raw = ip->src_ip;
-    out_pkt->dst_ip_raw = ip->dst_ip;
+    out_pkt->src_ip_raw   = ip->src_ip;
+    out_pkt->dst_ip_raw   = ip->dst_ip;
     PP_IpToStr(ip->src_ip, out_pkt->src_ip, sizeof(out_pkt->src_ip));
     PP_IpToStr(ip->dst_ip, out_pkt->dst_ip, sizeof(out_pkt->dst_ip));
-
     ptr += ihl;
 
     /* ---- 传输层 ---- */
     if (ip->protocol == IP_PROTO_TCP) {
-        if (ptr + sizeof(TcpHeader) > end) return 1;
+        if (ptr + (int)sizeof(TcpHeader) > end) return 1;
         const TcpHeader* tcp = (const TcpHeader*)ptr;
         out_pkt->src_port  = ntohs(tcp->src_port);
         out_pkt->dst_port  = ntohs(tcp->dst_port);
         out_pkt->tcp_flags = tcp->flags;
         out_pkt->tcp_seq   = ntohl(tcp->seq_num);
         out_pkt->tcp_ack   = ntohl(tcp->ack_num);
-
-        uint8_t tcp_hdr_len = ((tcp->data_offset >> 4) & 0x0F) * 4;
+        uint8_t tcp_hdr_len = (uint8_t)(((tcp->data_offset >> 4) & 0x0F) * 4);
         if (tcp_hdr_len < 20) tcp_hdr_len = 20;
         ptr += tcp_hdr_len;
-
         out_pkt->payload     = ptr;
         out_pkt->payload_len = (uint32_t)(end - ptr);
-
-        /* ---- 应用层协议识别 ---- */
-        uint16_t dport = out_pkt->dst_port;
-        uint16_t sport = out_pkt->src_port;
-
-        if ((dport == 445 || sport == 445 || dport == 139 || sport == 139)
-            && out_pkt->payload_len >= 4) {
-            PP_ParseSMB(out_pkt);
-        } else if ((dport == 3389 || sport == 3389) && out_pkt->payload_len >= 4) {
-            PP_ParseRDP(out_pkt);
-        } else if ((dport == 80 || sport == 80 ||
-                    dport == 8080 || sport == 8080 ||
-                    dport == 443 || sport == 443) && out_pkt->payload_len >= 16) {
-            PP_ParseHTTP(out_pkt);
-        } else if ((dport == 135 || sport == 135) && out_pkt->payload_len >= 16) {
-            PP_ParseDCERPC(out_pkt);
-        }
-
     } else if (ip->protocol == IP_PROTO_UDP) {
-        if (ptr + sizeof(UdpHeader) > end) return 1;
+        if (ptr + (int)sizeof(UdpHeader) > end) return 1;
         const UdpHeader* udp = (const UdpHeader*)ptr;
         out_pkt->src_port  = ntohs(udp->src_port);
         out_pkt->dst_port  = ntohs(udp->dst_port);
         ptr += sizeof(UdpHeader);
-
         out_pkt->payload     = ptr;
         out_pkt->payload_len = (uint32_t)(end - ptr);
-
-        if ((out_pkt->dst_port == 53 || out_pkt->src_port == 53)
-            && out_pkt->payload_len >= 12) {
-            PP_ParseDNS(out_pkt);
-        }
-
     } else if (ip->protocol == IP_PROTO_ICMP) {
-        if (ptr + sizeof(IcmpHeader) > end) return 1;
+        if (ptr + (int)sizeof(IcmpHeader) > end) return 1;
         const IcmpHeader* icmp = (const IcmpHeader*)ptr;
         out_pkt->icmp_type   = icmp->type;
         out_pkt->icmp_code   = icmp->code;
         out_pkt->payload     = ptr + sizeof(IcmpHeader);
         out_pkt->payload_len = (uint32_t)(end - out_pkt->payload);
+        return 1;
+    } else {
+        return 1;
     }
 
+    /* ---- nDPI 应用层协议识别 ---- */
+    struct ndpi_flow_struct* flow = NULL;
+    NdpiFlowCtx* tmp_fctx = NULL;
+
+    if (fctx && fctx->flow) {
+        flow = fctx->flow;
+    } else if (ctx && ctx->ndpi_struct && out_pkt->payload_len > 0) {
+        tmp_fctx = PP_FlowCreate();
+        if (tmp_fctx) flow = tmp_fctx->flow;
+    }
+
+    ndpi_protocol detected;
+    memset(&detected, 0, sizeof(detected));
+
+    if (ctx && ctx->ndpi_struct && flow && out_pkt->payload_len > 0) {
+        /* nDPI 需要从 IP 头开始的数据 */
+        const uint8_t* ip_start = raw_data + sizeof(EthHeader);
+        uint16_t etype = ntohs(((const EthHeader*)raw_data)->ether_type);
+        if (etype == ETHERTYPE_VLAN) ip_start += 4;
+        uint32_t ip_len = (uint32_t)(end - ip_start);
+
+        detected = ndpi_detection_process_packet(
+            ctx->ndpi_struct,
+            flow,
+            ip_start,
+            (unsigned short)(ip_len > 65535 ? 65535 : ip_len),
+            ts_us / 1000);
+
+        /* 若未确定，尝试 giveup */
+        if (detected.master_protocol == NDPI_PROTOCOL_UNKNOWN &&
+            detected.app_protocol    == NDPI_PROTOCOL_UNKNOWN) {
+            {
+                u_int8_t was_guessed = 0;
+                detected = ndpi_detection_giveup(ctx->ndpi_struct, flow, 1, &was_guessed);
+            }
+        }
+
+        if (fctx) {
+            fctx->detected_proto      = detected;
+            fctx->detection_completed = 1;
+        }
+    }
+
+    /* 映射 nDPI 协议到 ProtoType */
+    uint16_t master = detected.master_protocol;
+    uint16_t sub    = detected.app_protocol;
+    out_pkt->ndpi_master_proto = master;
+    out_pkt->ndpi_sub_proto    = sub;
+
+    if (ctx && ctx->ndpi_struct) {
+        ndpi_protocol2name(ctx->ndpi_struct, detected,
+                           out_pkt->ndpi_proto_name,
+                           sizeof(out_pkt->ndpi_proto_name));
+    }
+
+    ProtoType pt = ndpi_proto_to_type(master, sub);
+    if (pt == PROTO_UNKNOWN) pt = ndpi_proto_to_type(sub, 0);
+    out_pkt->app_proto = pt;
+
+    /* ---- 字段级细粒度解析 ---- */
+    switch (pt) {
+        case PROTO_SMB1:
+        case PROTO_SMB2:
+        case PROTO_SMB3_COMPRESS:
+            parse_smb_fields(out_pkt);
+            break;
+        case PROTO_HTTP:
+            parse_http_fields(out_pkt, flow);
+            break;
+        case PROTO_DNS:
+            parse_dns_fields(out_pkt, flow);
+            break;
+        case PROTO_RDP:
+            parse_rdp_fields(out_pkt);
+            break;
+        case PROTO_DCERPC:
+            parse_dcerpc_fields(out_pkt);
+            break;
+        case PROTO_KERBEROS:
+            parse_kerberos_fields(out_pkt, flow);
+            break;
+        default:
+            /* nDPI 未识别时，按端口做补充推断 */
+            port_based_fallback(out_pkt, flow);
+            break;
+    }
+
+    if (tmp_fctx) PP_FlowDestroy(tmp_fctx);
     return 1;
 }

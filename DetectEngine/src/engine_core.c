@@ -39,6 +39,7 @@ typedef struct VDE_Instance {
     VDE_Config      config;
     RuleEngine      rule_engine;
     Logger          logger;
+    NdpiContext     ndpi_ctx;     /* nDPI 协议识别上下文 */
 
     pcap_t*         pcap_handle;
     char            pcap_errbuf[PCAP_ERRBUF_SIZE];
@@ -121,7 +122,7 @@ static void pcap_packet_handler(
 
     /* 协议解析 */
     ParsedPacket pkt;
-    if (!PP_ParsePacket(packet, pkthdr->caplen, ts, &pkt)) return;
+    if (!PP_ParsePacket(&inst->ndpi_ctx, NULL, packet, pkthdr->caplen, ts, &pkt)) return;
 
 #ifdef _WIN32
     InterlockedIncrement64((LONGLONG*)&inst->stat_analyzed);
@@ -322,6 +323,11 @@ VDE_API VDE_ErrorCode VDE_Create(
               loaded, inst->rule_engine.ruleset.version);
     }
 
+    /* 初始化 nDPI */
+    if (PP_Init(&inst->ndpi_ctx) != 0) {
+        LOG_W(&inst->logger, "nDPI 初始化失败，将使用端口推断模式");
+    }
+
     /* 初始化统计锁 */
 #ifdef _WIN32
     InitializeCriticalSection(&inst->stat_lock);
@@ -347,6 +353,7 @@ VDE_API void VDE_Destroy(VDE_Handle handle)
     if (inst->running) VDE_Stop(handle);
 
     RE_Destroy(&inst->rule_engine);
+    PP_Destroy(&inst->ndpi_ctx);
     Logger_Destroy(&inst->logger);
 
     if (inst->pcap_handle) {

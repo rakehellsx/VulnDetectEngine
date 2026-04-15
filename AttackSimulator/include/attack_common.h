@@ -28,9 +28,11 @@
 #  define INVALID_SOCK  INVALID_SOCKET
 #else
 #  include <sys/socket.h>
+#  include <sys/select.h>
 #  include <netinet/in.h>
 #  include <arpa/inet.h>
 #  include <unistd.h>
+#  include <fcntl.h>
 #  include <errno.h>
 #  define SLEEP_MS(ms)  usleep((ms)*1000)
 #  define CLOSE_SOCK(s) close(s)

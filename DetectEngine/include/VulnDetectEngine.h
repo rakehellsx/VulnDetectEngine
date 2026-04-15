@@ -2,12 +2,12 @@
  * @file    VulnDetectEngine.h
  * @brief   漏洞攻击检测引擎 - 公共导出接口
  *
- * 本头文件定义了 VulnDetectEngine.dll 对外暴露的全部 C 接口、
+ * 本头文件定义了 VulnDetectEngine.dll/.so 对外暴露的全部 C 接口、
  * 数据结构、枚举类型及回调函数原型。
- * 宿主程序只需包含此头文件并链接对应的导入库（.lib）即可使用。
+ * 宿主程序只需包含此头文件并链接对应的库即可使用。
  *
- * 编译环境：Visual Studio 2017，Windows x86/x64
- * 依  赖：WinPcap / Npcap（libpcap for Windows）
+ * 编译环境：Visual Studio 2017 (Windows) / GCC 9+ (Linux)
+ * 依  赖：WinPcap / Npcap (Windows) 或 libpcap (Linux)
  */
 
 #ifndef VULN_DETECT_ENGINE_H
@@ -21,12 +21,26 @@ extern "C" {
 #include <stddef.h>
 
 /* =========================================================
- *  导出宏
+ *  导出宏（跨平台）
  * ========================================================= */
-#ifdef VULNDETECT_EXPORTS
-#   define VDE_API __declspec(dllexport)
+#ifdef _WIN32
+#   ifdef VULNDETECT_EXPORTS
+#       define VDE_API __declspec(dllexport)
+#   else
+#       define VDE_API __declspec(dllimport)
+#   endif
 #else
-#   define VDE_API __declspec(dllimport)
+    /* Linux / macOS: GCC/Clang visibility */
+#   ifdef VULNDETECT_EXPORTS
+#       define VDE_API __attribute__((visibility("default")))
+#   else
+#       define VDE_API
+#   endif
+#endif
+
+/* __cdecl 在 Linux 下无意义，定义为空 */
+#ifndef _WIN32
+#   define __cdecl
 #endif
 
 /* =========================================================
@@ -188,90 +202,44 @@ typedef void* VDE_Handle;
  *  导出函数声明
  * ========================================================= */
 
-/**
- * @brief  获取引擎版本字符串
- * @return 版本字符串指针，如 "1.0.0"
- */
+/** @brief 获取引擎版本字符串 */
 VDE_API const char* VDE_GetVersion(void);
 
-/**
- * @brief  枚举系统上所有可用的网络接口
- * @param  out_list  [out] 设备列表结构体，由调用方分配
- * @return VDE_OK 或错误码
- */
+/** @brief 枚举系统上所有可用的网络接口 */
 VDE_API VDE_ErrorCode VDE_EnumDevices(VDE_DeviceList* out_list);
 
-/**
- * @brief  创建检测引擎实例
- * @param  config    引擎配置（必须提供有效的 alert_callback）
- * @param  out_handle [out] 成功时返回引擎句柄
- * @return VDE_OK 或错误码
- * @note   每个进程可创建多个实例，监听不同网卡
- */
+/** @brief 创建检测引擎实例 */
 VDE_API VDE_ErrorCode VDE_Create(
     const VDE_Config*   config,
     VDE_Handle*         out_handle
 );
 
-/**
- * @brief  销毁引擎实例，释放所有资源
- * @param  handle  由 VDE_Create 返回的句柄
- */
+/** @brief 销毁引擎实例，释放所有资源 */
 VDE_API void VDE_Destroy(VDE_Handle handle);
 
-/**
- * @brief  启动检测引擎（非阻塞，内部创建捕获线程）
- * @param  handle  引擎句柄
- * @return VDE_OK 或错误码
- */
+/** @brief 启动检测引擎（非阻塞，内部创建捕获线程） */
 VDE_API VDE_ErrorCode VDE_Start(VDE_Handle handle);
 
-/**
- * @brief  停止检测引擎
- * @param  handle  引擎句柄
- * @return VDE_OK 或错误码
- */
+/** @brief 停止检测引擎 */
 VDE_API VDE_ErrorCode VDE_Stop(VDE_Handle handle);
 
-/**
- * @brief  查询引擎是否正在运行
- * @param  handle  引擎句柄
- * @return 1=运行中，0=已停止
- */
+/** @brief 查询引擎是否正在运行（1=运行中，0=已停止） */
 VDE_API int VDE_IsRunning(VDE_Handle handle);
 
-/**
- * @brief  热加载/重载规则库（无需停止引擎）
- * @param  handle       引擎句柄
- * @param  rule_db_path 新规则库JSON文件路径（NULL=重载当前路径）
- * @return VDE_OK 或错误码
- */
+/** @brief 热加载/重载规则库（无需停止引擎） */
 VDE_API VDE_ErrorCode VDE_ReloadRules(
     VDE_Handle  handle,
     const char* rule_db_path
 );
 
-/**
- * @brief  启用或禁用单条规则
- * @param  handle   引擎句柄
- * @param  rule_id  规则ID字符串，如 "VDE-001"
- * @param  enable   1=启用，0=禁用
- * @return VDE_OK 或错误码
- */
+/** @brief 启用或禁用单条规则 */
 VDE_API VDE_ErrorCode VDE_SetRuleEnabled(
     VDE_Handle  handle,
     const char* rule_id,
     int         enable
 );
 
-/**
- * @brief  获取所有已加载规则的信息
- * @param  handle       引擎句柄
- * @param  out_rules    [out] 规则信息数组，由调用方分配
- * @param  max_count    数组最大容量
- * @param  out_count    [out] 实际规则数量
- * @return VDE_OK 或错误码
- */
+/** @brief 获取所有已加载规则的信息 */
 VDE_API VDE_ErrorCode VDE_GetRules(
     VDE_Handle      handle,
     VDE_RuleInfo*   out_rules,
@@ -279,43 +247,22 @@ VDE_API VDE_ErrorCode VDE_GetRules(
     int*            out_count
 );
 
-/**
- * @brief  获取引擎运行统计信息
- * @param  handle   引擎句柄
- * @param  out_stat [out] 统计信息结构体
- * @return VDE_OK 或错误码
- */
+/** @brief 获取引擎运行统计信息 */
 VDE_API VDE_ErrorCode VDE_GetStatistics(
     VDE_Handle      handle,
     VDE_Statistics* out_stat
 );
 
-/**
- * @brief  重置统计计数器
- * @param  handle  引擎句柄
- * @return VDE_OK 或错误码
- */
+/** @brief 重置统计计数器 */
 VDE_API VDE_ErrorCode VDE_ResetStatistics(VDE_Handle handle);
 
-/**
- * @brief  获取最近一次错误的详细描述字符串
- * @param  handle  引擎句柄（可为NULL，返回全局错误）
- * @return 错误描述字符串
- */
+/** @brief 获取最近一次错误的详细描述字符串 */
 VDE_API const char* VDE_GetLastError(VDE_Handle handle);
 
-/**
- * @brief  将错误码转换为可读字符串
- * @param  code  错误码
- * @return 错误描述字符串
- */
+/** @brief 将错误码转换为可读字符串 */
 VDE_API const char* VDE_ErrorString(VDE_ErrorCode code);
 
-/**
- * @brief  将严重级别枚举转换为字符串
- * @param  sev  严重级别
- * @return 字符串，如 "CRITICAL"
- */
+/** @brief 将严重级别枚举转换为字符串 */
 VDE_API const char* VDE_SeverityString(VDE_Severity sev);
 
 #ifdef __cplusplus

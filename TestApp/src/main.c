@@ -37,6 +37,9 @@
 #endif
 
 #include "../../DetectEngine/include/VulnDetectEngine.h"
+#ifndef RE_MAX_RULES
+#  define RE_MAX_RULES  256
+#endif
 
 /* =========================================================
  *  全局变量
@@ -167,8 +170,13 @@ int main(int argc, char* argv[])
 {
     /* 默认参数 */
     char device[VDE_MAX_DEV_LEN]      = "";
+#ifdef _WIN32
     char rule_db[VDE_MAX_PATH_LEN]    = ".\\RuleDB\\vuln_rules.json";
     char log_dir[VDE_MAX_PATH_LEN]    = ".\\logs";
+#else
+    char rule_db[VDE_MAX_PATH_LEN]    = "./RuleDB/vuln_rules.json";
+    char log_dir[VDE_MAX_PATH_LEN]    = "./logs";
+#endif
     char bpf_filter[VDE_MAX_FILTER_LEN] = "";
     VDE_CaptureMode mode = VDE_MODE_LIVE;
     int verbose      = 0;

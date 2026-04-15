@@ -218,9 +218,14 @@ static int parse_one_rule(const cJSON* jrule, Rule* rule)
             if (cidx >= RE_MAX_CONDITIONS) break;
             RuleCondition* cond = &rule->conditions[cidx];
 
-            GET_STR("field",   cond->field,   sizeof(cond->field))
-            GET_STR("value",   cond->value,   sizeof(cond->value))
-            GET_STR("comment", cond->comment, sizeof(cond->comment))
+            /* 注意：此处必须从 jcond 读取，而非 jrule */
+            cJSON* jf;
+            jf = cJSON_GetObjectItemCaseSensitive(jcond, "field");
+            if (cJSON_IsString(jf)) SAFE_STRNCPY(cond->field, jf->valuestring, sizeof(cond->field));
+            jf = cJSON_GetObjectItemCaseSensitive(jcond, "value");
+            if (cJSON_IsString(jf)) SAFE_STRNCPY(cond->value, jf->valuestring, sizeof(cond->value));
+            jf = cJSON_GetObjectItemCaseSensitive(jcond, "comment");
+            if (cJSON_IsString(jf)) SAFE_STRNCPY(cond->comment, jf->valuestring, sizeof(cond->comment));
 
             j = cJSON_GetObjectItemCaseSensitive(jcond, "op");
             if (cJSON_IsString(j)) cond->op = op_from_str(j->valuestring);
@@ -713,14 +718,54 @@ static int eval_condition(const RuleCondition* cond, const ParsedPacket* pkt)
         case OP_NEQ:
             return strcasecmp(field_val, cond->value) != 0;
         case OP_CONTAINS:
-            return strstr(field_val, cond->value) != NULL;
+            /* 大小写不敏感子串搜索 */
+            return strcasestr(field_val, cond->value) != NULL;
         case OP_REGEX: {
-            /* 简单展开匹配（生产环境建议替换为 PCRE2） */
-            uint8_t expanded[512];
-            int exp_len = expand_pattern(cond->value, expanded, sizeof(expanded));
-            if (exp_len <= 0) return 0;
-            return bmh_search((const uint8_t*)field_val, strlen(field_val),
-                               expanded, (size_t)exp_len) != NULL;
+#ifndef _WIN32
+            /* POSIX 扩展正则（Linux/macOS 内置，零依赖）
+             * 注意：POSIX ERE 不支持 (?i) 内联标志，需先去除 */
+            const char* pat = cond->value;
+            char pat_buf[2048];
+            /* 去除 (?i) 或 (?-i) 前缀（已用 REG_ICASE 全局设置） */
+            if (pat[0] == '(' && pat[1] == '?' && pat[2] == 'i' && pat[3] == ')') {
+                pat = pat + 4;
+            } else if (pat[0] == '(' && pat[1] == '?' && pat[2] == '-' && pat[3] == 'i' && pat[4] == ')') {
+                pat = pat + 5;
+            }
+            /* 将 \s 替换为 [[:space:]] （POSIX 兼容） */
+            {
+                const char* src = pat;
+                char* dst = pat_buf;
+                char* end = pat_buf + sizeof(pat_buf) - 4;
+                while (*src && dst < end) {
+                    if (src[0] == '\\' && src[1] == 's') {
+                        memcpy(dst, "[[:space:]]", 11); dst += 11; src += 2;
+                    } else if (src[0] == '\\' && src[1] == 'S') {
+                        memcpy(dst, "[^[:space:]]", 12); dst += 12; src += 2;
+                    } else if (src[0] == '\\' && src[1] == 'd') {
+                        memcpy(dst, "[0-9]", 5); dst += 5; src += 2;
+                    } else if (src[0] == '\\' && src[1] == 'w') {
+                        memcpy(dst, "[[:alnum:]_]", 12); dst += 12; src += 2;
+                    } else {
+                        *dst++ = *src++;
+                    }
+                }
+                *dst = '\0';
+                pat = pat_buf;
+            }
+            regex_t re;
+            int rflags = REG_EXTENDED | REG_ICASE | REG_NOSUB;
+            if (regcomp(&re, pat, rflags) != 0) {
+                /* 正则编译失败时回退为子串搜索 */
+                return strcasestr(field_val, cond->value) != NULL;
+            }
+            int matched = (regexec(&re, field_val, 0, NULL, 0) == 0);
+            regfree(&re);
+            return matched;
+#else
+            /* Windows 回退：大小写不敏感子串搜索 */
+            return strcasestr(field_val, cond->value) != NULL;
+#endif
         }
         case OP_HEX_MATCH:
             return bmh_search((const uint8_t*)field_val, strlen(field_val),
