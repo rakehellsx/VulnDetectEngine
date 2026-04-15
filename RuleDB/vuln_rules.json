@@ -1,0 +1,1049 @@
+{
+  "version": "2.0.0",
+  "description": "VulnDetectEngine漏洞特征库 - 覆盖SMB/RDP/HTTP/DNS/Kerberos/横向移动/供应链等60条规则",
+  "last_updated": "2024-01-01",
+  "rules": [
+    {
+      "id": "VDE-001",
+      "name": "EternalBlue-MS17-010",
+      "cve": "CVE-2017-0144",
+      "description": "永恒之蓝 SMBv1 缓冲区溢出漏洞利用检测（WannaCry/NotPetya载体）",
+      "severity": "CRITICAL",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATEFUL",
+      "conditions": [
+        { "field": "smb_command", "op": "EQ", "value": "0x72", "comment": "SMB Negotiate Protocol Request" },
+        { "field": "smb_version", "op": "EQ", "value": "1", "comment": "SMBv1协议" },
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "FF534D4272", "comment": "SMBv1 Negotiate魔数" }
+      ],
+      "follow_up": {
+        "smb_command": "0x25",
+        "payload_pattern": "FF534D4225",
+        "max_interval_ms": 5000
+      },
+      "action": "ALERT",
+      "references": ["https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2017-0144"]
+    },
+    {
+      "id": "VDE-002",
+      "name": "EternalBlue-DoublePulsar-Backdoor",
+      "cve": "CVE-2017-0144",
+      "description": "DoublePulsar后门植入检测 - EternalBlue利用成功后的后门通信特征",
+      "severity": "CRITICAL",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "FF534D4272000000000098534300", "comment": "DoublePulsar ping请求特征" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-003",
+      "name": "BlueKeep-CVE-2019-0708",
+      "cve": "CVE-2019-0708",
+      "description": "BlueKeep RDP远程代码执行漏洞检测 - 利用MS_T120通道UAF",
+      "severity": "CRITICAL",
+      "protocol": "RDP",
+      "transport": "TCP",
+      "dst_port": 3389,
+      "enabled": true,
+      "match_type": "STATEFUL",
+      "conditions": [
+        { "field": "rdp_channel", "op": "EQ", "value": "MS_T120", "comment": "异常MS_T120通道绑定" },
+        { "field": "payload_length", "op": "GT", "value": "1024", "comment": "异常大载荷触发UAF" }
+      ],
+      "follow_up": {
+        "payload_pattern": "4D535F543132300000",
+        "max_interval_ms": 5000
+      },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-004",
+      "name": "DejaBlue-CVE-2019-1181",
+      "cve": "CVE-2019-1181",
+      "description": "DejaBlue RDP堆溢出漏洞检测",
+      "severity": "CRITICAL",
+      "protocol": "RDP",
+      "transport": "TCP",
+      "dst_port": 3389,
+      "enabled": true,
+      "match_type": "STATEFUL",
+      "conditions": [
+        { "field": "rdp_pdu_type", "op": "EQ", "value": "0x04", "comment": "RDP Data PDU" },
+        { "field": "payload_length", "op": "GT", "value": "2048", "comment": "异常载荷长度触发堆溢出" }
+      ],
+      "follow_up": {
+        "payload_pattern": "030000",
+        "max_interval_ms": 3000
+      },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-005",
+      "name": "PrintNightmare-CVE-2021-34527",
+      "cve": "CVE-2021-34527",
+      "description": "PrintNightmare Windows打印后台处理程序RCE漏洞检测",
+      "severity": "CRITICAL",
+      "protocol": "DCERPC",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATEFUL",
+      "conditions": [
+        { "field": "dcerpc_uuid", "op": "EQ", "value": "12345678-1234-abcd-ef00-0123456789ab", "comment": "Spooler UUID" },
+        { "field": "dcerpc_opnum", "op": "EQ", "value": "0x5d", "comment": "RpcAddPrinterDriverEx" }
+      ],
+      "follow_up": {
+        "payload_pattern": "2E646C6C",
+        "max_interval_ms": 10000
+      },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-006",
+      "name": "MS08-067-NetAPI",
+      "cve": "CVE-2008-4250",
+      "description": "MS08-067 NetAPI缓冲区溢出漏洞检测（Conficker蠕虫载体）",
+      "severity": "CRITICAL",
+      "protocol": "DCERPC",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "dcerpc_uuid", "op": "EQ", "value": "4b324fc8-1670-01d3-1278-5a47bf6ee188", "comment": "srvsvc接口UUID" },
+        { "field": "dcerpc_opnum", "op": "EQ", "value": "0x1F", "comment": "NetPathCanonicalize操作" },
+        { "field": "payload_pattern", "op": "REGEX", "value": "(\\.\\./|\\.\\.\\\\){3,}", "comment": "路径遍历特征" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-007",
+      "name": "SMBGhost-CVE-2020-0796",
+      "cve": "CVE-2020-0796",
+      "description": "SMBGhost SMBv3.1.1压缩功能整数溢出漏洞检测",
+      "severity": "CRITICAL",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "smb_version", "op": "EQ", "value": "3", "comment": "SMBv3协议" },
+        { "field": "smb_compression_flag", "op": "EQ", "value": "1", "comment": "压缩标志位置位" },
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "FC534D42", "comment": "SMBv3压缩包魔数" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-008",
+      "name": "Log4Shell-CVE-2021-44228",
+      "cve": "CVE-2021-44228",
+      "description": "Log4j2 JNDI注入远程代码执行漏洞检测",
+      "severity": "CRITICAL",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "http_header_any", "op": "REGEX", "value": "\\$\\{jndi:(ldap|rmi|dns|ldaps|iiop|corba)s?://", "comment": "JNDI注入payload特征" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-009",
+      "name": "ProxyLogon-CVE-2021-26855",
+      "cve": "CVE-2021-26855",
+      "description": "Exchange Server ProxyLogon SSRF漏洞检测",
+      "severity": "CRITICAL",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 443,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "http_header_any", "op": "CONTAINS", "value": "X-AnonResource-Backend" },
+        { "field": "http_uri", "op": "CONTAINS", "value": "/ecp/" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-010",
+      "name": "ZeroLogon-CVE-2020-1472",
+      "cve": "CVE-2020-1472",
+      "description": "ZeroLogon Netlogon特权提升漏洞检测",
+      "severity": "CRITICAL",
+      "protocol": "DCERPC",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATEFUL",
+      "conditions": [
+        { "field": "dcerpc_uuid", "op": "EQ", "value": "12345678-1234-abcd-ef00-01234567cffb", "comment": "Netlogon接口UUID" },
+        { "field": "dcerpc_opnum", "op": "EQ", "value": "0x04", "comment": "NetrServerReqChallenge" },
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "000000000000000000000000000000000000000000000000", "comment": "全零ClientChallenge特征" }
+      ],
+      "follow_up": {
+        "smb_command": "0x04",
+        "max_interval_ms": 5000
+      },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-011",
+      "name": "WannaCry-KillSwitch-Domain",
+      "cve": "CVE-2017-0144",
+      "description": "WannaCry勒索软件域名查询检测（killswitch域名探测行为）",
+      "severity": "HIGH",
+      "protocol": "DNS",
+      "transport": "UDP",
+      "dst_port": 53,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "dns_query", "op": "CONTAINS", "value": "iuqerfsodp9ifjaposdfjhgosurijfaewrwergwea.com" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-012",
+      "name": "SMB-Brute-Force",
+      "cve": "N/A",
+      "description": "SMB暴力破解攻击检测 - 短时间内大量认证失败",
+      "severity": "HIGH",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "smb_status", "op": "EQ", "value": "0xC000006D", "comment": "STATUS_LOGON_FAILURE" }
+      ],
+      "threshold": { "count": 10, "window_ms": 5000, "group_by": "src_ip" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-013",
+      "name": "RDP-Brute-Force",
+      "cve": "N/A",
+      "description": "RDP暴力破解攻击检测",
+      "severity": "HIGH",
+      "protocol": "RDP",
+      "transport": "TCP",
+      "dst_port": 3389,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "tcp_flags", "op": "EQ", "value": "SYN", "comment": "大量SYN连接尝试" }
+      ],
+      "threshold": { "count": 8, "window_ms": 10000, "group_by": "src_ip" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-014",
+      "name": "Port-Scan-SYN",
+      "cve": "N/A",
+      "description": "TCP SYN端口扫描行为检测",
+      "severity": "MEDIUM",
+      "protocol": "TCP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "tcp_flags", "op": "EQ", "value": "SYN" }
+      ],
+      "threshold": { "count": 20, "window_ms": 3000, "group_by": "src_ip", "unique_field": "dst_port" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-015",
+      "name": "ICMP-Flood",
+      "cve": "N/A",
+      "description": "ICMP洪泛攻击检测",
+      "severity": "MEDIUM",
+      "protocol": "ICMP",
+      "transport": "ICMP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "icmp_type", "op": "EQ", "value": "8" }
+      ],
+      "threshold": { "count": 100, "window_ms": 1000, "group_by": "src_ip" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-016",
+      "name": "Mimikatz-LSASS-SMB",
+      "cve": "N/A",
+      "description": "Mimikatz通过SMB访问LSASS进程内存特征检测",
+      "severity": "CRITICAL",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "smb_filename", "op": "REGEX", "value": "lsass\\.dmp|lsass\\.exe|lsass\\.mdmp" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-017",
+      "name": "EternalRomance-MS17-010",
+      "cve": "CVE-2017-0145",
+      "description": "永恒浪漫 SMBv1 越界读写漏洞检测",
+      "severity": "CRITICAL",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATEFUL",
+      "conditions": [
+        { "field": "smb_command", "op": "EQ", "value": "0x2F", "comment": "SMB Write AndX" },
+        { "field": "smb_fid", "op": "EQ", "value": "0x0000", "comment": "无效FID触发越界" },
+        { "field": "payload_length", "op": "GT", "value": "65535" }
+      ],
+      "follow_up": {
+        "smb_command": "0x25",
+        "max_interval_ms": 3000
+      },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-018",
+      "name": "Shellcode-NOP-Sled",
+      "cve": "N/A",
+      "description": "通用Shellcode NOP滑板检测",
+      "severity": "HIGH",
+      "protocol": "ANY",
+      "transport": "ANY",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "909090909090909090909090909090909090909090909090", "comment": "24字节NOP sled" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-019",
+      "name": "EternalChampion-MS17-010",
+      "cve": "CVE-2017-0146",
+      "description": "永恒冠军 SMBv1 Transaction竞争条件漏洞",
+      "severity": "CRITICAL",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "smb_version", "op": "EQ", "value": "1" },
+        { "field": "smb_command", "op": "EQ", "value": "0x25", "comment": "Trans2" },
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "FF534D4225000000001807", "comment": "Trans2溢出特征" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-020",
+      "name": "SMB-Null-Session-Enum",
+      "cve": "N/A",
+      "description": "SMB空会话枚举，攻击者利用匿名连接枚举共享和用户信息",
+      "severity": "MEDIUM",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "smb_command", "op": "EQ", "value": "0x73", "comment": "Session Setup" },
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "4E544C4D53535000010000000000000000000000", "comment": "NTLMSSP空用户Negotiate" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-021",
+      "name": "PsExec-Lateral-Movement",
+      "cve": "N/A",
+      "description": "PsExec横向移动检测，通过ADMIN$共享写入并执行服务",
+      "severity": "HIGH",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATEFUL",
+      "conditions": [
+        { "field": "smb_tree_path", "op": "CONTAINS", "value": "ADMIN$" },
+        { "field": "smb_command", "op": "EQ", "value": "0x2F" }
+      ],
+      "follow_up": {
+        "smb_command": "0xA2",
+        "max_interval_ms": 10000
+      },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-022",
+      "name": "SMB-Ransomware-Mass-Write",
+      "cve": "N/A",
+      "description": "勒索软件行为：短时间内对大量文件执行SMB写操作（加密特征）",
+      "severity": "CRITICAL",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "smb_command", "op": "EQ", "value": "0x2F" }
+      ],
+      "threshold": { "count": 200, "window_ms": 10000, "group_by": "src_ip" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-023",
+      "name": "Pass-The-Hash-NTLM",
+      "cve": "N/A",
+      "description": "Pass-The-Hash攻击：使用NTLM哈希进行横向认证",
+      "severity": "CRITICAL",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "4E544C4D53535000030000002800000000000000", "comment": "NTLMSSP Authenticate" },
+        { "field": "smb_command", "op": "EQ", "value": "0x73" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-024",
+      "name": "DCSync-Attack",
+      "cve": "N/A",
+      "description": "DCSync攻击：非域控机器发起DRS复制请求，导出域内所有哈希",
+      "severity": "CRITICAL",
+      "protocol": "DCERPC",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "dcerpc_uuid", "op": "EQ", "value": "e3514235-4b06-11d1-ab04-00c04fc2dcd2", "comment": "DRS UUID" },
+        { "field": "dcerpc_opnum", "op": "EQ", "value": "0x03", "comment": "DRSGetNCChanges" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-025",
+      "name": "Kerberoasting",
+      "cve": "N/A",
+      "description": "Kerberoasting攻击：请求服务票据以离线破解服务账户密码",
+      "severity": "HIGH",
+      "protocol": "TCP",
+      "transport": "TCP",
+      "dst_port": 88,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "6B820", "comment": "KRB5 TGS-REQ tag" }
+      ],
+      "threshold": { "count": 10, "window_ms": 60000, "group_by": "src_ip" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-026",
+      "name": "AS-REP-Roasting",
+      "cve": "N/A",
+      "description": "AS-REP Roasting：对不需要预认证的账户请求AS-REP，离线破解哈希",
+      "severity": "HIGH",
+      "protocol": "UDP",
+      "transport": "UDP",
+      "dst_port": 88,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "6A820", "comment": "KRB5 AS-REQ tag" },
+        { "field": "payload_length", "op": "LT", "value": "100", "comment": "无预认证字段" }
+      ],
+      "threshold": { "count": 5, "window_ms": 30000, "group_by": "src_ip" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-027",
+      "name": "Golden-Ticket-Attack",
+      "cve": "N/A",
+      "description": "黄金票据攻击：使用伪造TGT访问域服务，特征为超大Kerberos票据",
+      "severity": "CRITICAL",
+      "protocol": "TCP",
+      "transport": "TCP",
+      "dst_port": 88,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "6B820", "comment": "TGS-REQ" },
+        { "field": "payload_length", "op": "GT", "value": "1500", "comment": "超大票据（含伪造PAC）" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-028",
+      "name": "MS14-068-Kerberos-PAC-Forgery",
+      "cve": "CVE-2014-6324",
+      "description": "MS14-068 Kerberos权限提升：普通用户伪造PAC获取域管权限",
+      "severity": "CRITICAL",
+      "protocol": "TCP",
+      "transport": "TCP",
+      "dst_port": 88,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "6B820", "comment": "TGS-REQ" },
+        { "field": "payload_length", "op": "GT", "value": "2000", "comment": "含伪造PAC的超大票据" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-029",
+      "name": "WMI-Lateral-Movement",
+      "cve": "N/A",
+      "description": "WMI横向移动：通过DCOM/WMI远程执行命令（Win32_Process.Create）",
+      "severity": "HIGH",
+      "protocol": "DCERPC",
+      "transport": "TCP",
+      "dst_port": 135,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "dcerpc_uuid", "op": "EQ", "value": "8bc3f05e-d86b-11d0-a075-00c04fb68820", "comment": "WMI UUID" },
+        { "field": "payload_pattern", "op": "CONTAINS", "value": "Win32_Process", "comment": "WMI进程创建" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-030",
+      "name": "DCOM-ShellWindows-Lateral",
+      "cve": "N/A",
+      "description": "通过DCOM ShellWindows对象实现横向移动",
+      "severity": "HIGH",
+      "protocol": "DCERPC",
+      "transport": "TCP",
+      "dst_port": 135,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "9BA05972F6D111D28F3200C04F8EF57F", "comment": "ShellWindows CLSID" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-031",
+      "name": "NTLM-Relay-Attack",
+      "cve": "N/A",
+      "description": "NTLM中继攻击：检测NTLMSSP Negotiate包（中间人特征）",
+      "severity": "CRITICAL",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "4E544C4D5353500001000000", "comment": "NTLMSSP Negotiate" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-032",
+      "name": "LDAP-AD-Enumeration",
+      "cve": "N/A",
+      "description": "LDAP大规模枚举：短时间内大量LDAP搜索请求（AD信息收集）",
+      "severity": "MEDIUM",
+      "protocol": "TCP",
+      "transport": "TCP",
+      "dst_port": 389,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "6382", "comment": "LDAP SearchRequest" }
+      ],
+      "threshold": { "count": 50, "window_ms": 30000, "group_by": "src_ip" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-033",
+      "name": "Log4Shell-Bypass-Obfuscation",
+      "cve": "CVE-2021-44228",
+      "description": "Log4Shell混淆绕过变体：通过${${::-j}${::-n}...}绕过WAF",
+      "severity": "CRITICAL",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_pattern", "op": "REGEX", "value": "\\$\\{[^}]*j[^}]*n[^}]*d[^}]*i[^}]*:", "comment": "混淆JNDI" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-034",
+      "name": "ProxyShell-CVE-2021-34473",
+      "cve": "CVE-2021-34473",
+      "description": "Exchange ProxyShell路径混淆绕过认证",
+      "severity": "CRITICAL",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 443,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "http_uri", "op": "REGEX", "value": "/autodiscover/autodiscover\\.json.*@.*\\?", "comment": "路径混淆特征" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-035",
+      "name": "Spring4Shell-CVE-2022-22965",
+      "cve": "CVE-2022-22965",
+      "description": "Spring Framework RCE，通过class.module.classLoader参数写入WebShell",
+      "severity": "CRITICAL",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_pattern", "op": "CONTAINS", "value": "class.module.classLoader" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-036",
+      "name": "Apache-Struts2-OGNL-RCE",
+      "cve": "CVE-2017-5638",
+      "description": "Struts2 Content-Type OGNL注入RCE",
+      "severity": "CRITICAL",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "http_header_any", "op": "REGEX", "value": "Content-Type.*%\\{.*exec\\(", "comment": "OGNL表达式注入" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-037",
+      "name": "HTTP-SQL-Injection",
+      "cve": "N/A",
+      "description": "HTTP请求中的SQL注入特征检测",
+      "severity": "HIGH",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "http_uri", "op": "REGEX", "value": "(?i)(union.{0,20}select|or.{0,5}1=1|--\\s*$|;\\s*drop\\s+table)" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-038",
+      "name": "HTTP-XSS-Reflected",
+      "cve": "N/A",
+      "description": "HTTP反射型XSS攻击特征",
+      "severity": "MEDIUM",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "http_uri", "op": "REGEX", "value": "(?i)(<script[^>]*>|javascript:|on(load|error|click)\\s*=)" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-039",
+      "name": "HTTP-Path-Traversal",
+      "cve": "N/A",
+      "description": "HTTP路径遍历攻击，尝试读取系统文件",
+      "severity": "HIGH",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "http_uri", "op": "REGEX", "value": "(\\.\\./){3,}|%2e%2e%2f|%252e%252e%252f|/etc/passwd|/windows/system32" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-040",
+      "name": "HTTP-WebShell-Upload",
+      "cve": "N/A",
+      "description": "HTTP文件上传WebShell，检测上传含eval/exec的脚本文件",
+      "severity": "CRITICAL",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "http_method", "op": "EQ", "value": "POST" },
+        { "field": "payload_pattern", "op": "REGEX", "value": "(?i)(eval\\s*\\(|base64_decode|system\\s*\\(|passthru|shell_exec)" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-041",
+      "name": "HTTP-Brute-Force-Login",
+      "cve": "N/A",
+      "description": "HTTP登录接口暴力破解",
+      "severity": "HIGH",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "http_method", "op": "EQ", "value": "POST" },
+        { "field": "http_uri", "op": "REGEX", "value": "(?i)/(login|signin|auth|wp-login\\.php)" }
+      ],
+      "threshold": { "count": 30, "window_ms": 60000, "group_by": "src_ip" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-042",
+      "name": "HTTP-Scanner-UserAgent",
+      "cve": "N/A",
+      "description": "常见漏洞扫描器User-Agent特征检测",
+      "severity": "LOW",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "http_header_any", "op": "REGEX", "value": "(?i)(sqlmap|nikto|nmap|masscan|zgrab|nuclei|dirsearch|gobuster|hydra)" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-043",
+      "name": "DNS-Amplification-Attack",
+      "cve": "N/A",
+      "description": "DNS放大攻击：大量ANY类型查询（DDoS反射放大）",
+      "severity": "HIGH",
+      "protocol": "DNS",
+      "transport": "UDP",
+      "dst_port": 53,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "00FF0001", "comment": "QTYPE=ANY" }
+      ],
+      "threshold": { "count": 100, "window_ms": 5000, "group_by": "src_ip" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-044",
+      "name": "DNS-Tunneling",
+      "cve": "N/A",
+      "description": "DNS隧道通信：查询名称异常长，用于数据渗漏",
+      "severity": "HIGH",
+      "protocol": "DNS",
+      "transport": "UDP",
+      "dst_port": 53,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_length", "op": "GT", "value": "100" },
+        { "field": "dns_query", "op": "REGEX", "value": "[a-zA-Z0-9]{30,}\\.", "comment": "超长随机子域名" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-045",
+      "name": "SolarWinds-SUNBURST-Beacon",
+      "cve": "CVE-2020-10148",
+      "description": "SolarWinds SUNBURST后门C2心跳，检测伪装成Orion流量的DNS查询",
+      "severity": "CRITICAL",
+      "protocol": "DNS",
+      "transport": "UDP",
+      "dst_port": 53,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "dns_query", "op": "REGEX", "value": "[a-z0-9]{20,32}\\.avsvmcloud\\.com" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-046",
+      "name": "Cobalt-Strike-Beacon-HTTP",
+      "cve": "N/A",
+      "description": "Cobalt Strike Beacon HTTP C2通信特征",
+      "severity": "CRITICAL",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "http_uri", "op": "REGEX", "value": "^/(jquery-3\\.3\\.1\\.min\\.js|pixel\\.gif|updates\\.rss|load\\.php)$" },
+        { "field": "http_header_any", "op": "CONTAINS", "value": "PHPSESSID" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-047",
+      "name": "Cobalt-Strike-Beacon-DNS",
+      "cve": "N/A",
+      "description": "Cobalt Strike DNS Beacon C2通信，通过TXT记录传输数据",
+      "severity": "CRITICAL",
+      "protocol": "DNS",
+      "transport": "UDP",
+      "dst_port": 53,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "0010", "comment": "DNS TXT查询" }
+      ],
+      "threshold": { "count": 20, "window_ms": 60000, "group_by": "src_ip" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-048",
+      "name": "Emotet-C2-HTTP",
+      "cve": "N/A",
+      "description": "Emotet恶意软件HTTP C2通信特征",
+      "severity": "CRITICAL",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "http_method", "op": "EQ", "value": "POST" },
+        { "field": "http_cookie", "op": "REGEX", "value": "[A-Za-z0-9+/]{40,}={0,2}$", "comment": "Base64编码加密载荷" },
+        { "field": "payload_length", "op": "GT", "value": "200" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-049",
+      "name": "Ryuk-Ransomware-SMB-Spread",
+      "cve": "N/A",
+      "description": "Ryuk勒索软件通过SMB传播，大量NT Create操作",
+      "severity": "CRITICAL",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "smb_command", "op": "EQ", "value": "0xA2", "comment": "NT Create" }
+      ],
+      "threshold": { "count": 50, "window_ms": 30000, "group_by": "src_ip" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-050",
+      "name": "Shellcode-Metasploit-Stager",
+      "cve": "N/A",
+      "description": "Metasploit bind/reverse shell载荷特征",
+      "severity": "CRITICAL",
+      "protocol": "ANY",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "FC4883E4F0E8C0000000415141505251", "comment": "Meterpreter stager头" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-051",
+      "name": "Heap-Spray-Pattern",
+      "cve": "N/A",
+      "description": "堆喷射攻击特征：大量重复的0x0C0C0C0C填充模式",
+      "severity": "HIGH",
+      "protocol": "ANY",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C0C", "comment": "堆喷射填充模式" },
+        { "field": "payload_length", "op": "GT", "value": "1024" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-052",
+      "name": "MS03-026-DCOM-RPC-Blaster",
+      "cve": "CVE-2003-0352",
+      "description": "MS03-026 DCOM RPC缓冲区溢出（冲击波蠕虫）",
+      "severity": "CRITICAL",
+      "protocol": "DCERPC",
+      "transport": "TCP",
+      "dst_port": 135,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_length", "op": "GT", "value": "1000" },
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "05000B03", "comment": "DCERPC Bind Request" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-053",
+      "name": "CVE-2022-26134-Confluence-OGNL",
+      "cve": "CVE-2022-26134",
+      "description": "Confluence Server OGNL注入RCE，通过URI路径注入执行命令",
+      "severity": "CRITICAL",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 8090,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "http_uri", "op": "REGEX", "value": "/%24%7B.*%7D/|/\\$\\{.*\\}/" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-054",
+      "name": "CVE-2021-21985-vCenter-RCE",
+      "cve": "CVE-2021-21985",
+      "description": "VMware vCenter Server插件RCE",
+      "severity": "CRITICAL",
+      "protocol": "HTTP",
+      "transport": "TCP",
+      "dst_port": 443,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "http_uri", "op": "CONTAINS", "value": "/ui/vropspluginui/rest/services/" },
+        { "field": "http_method", "op": "EQ", "value": "POST" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-055",
+      "name": "UDP-Flood-DDoS",
+      "cve": "N/A",
+      "description": "UDP泛洪攻击，大量UDP包打向随机端口",
+      "severity": "MEDIUM",
+      "protocol": "UDP",
+      "transport": "UDP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "payload_length", "op": "GT", "value": "0" }
+      ],
+      "threshold": { "count": 1000, "window_ms": 5000, "group_by": "src_ip" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-056",
+      "name": "Port-Scan-NULL-FIN",
+      "cve": "N/A",
+      "description": "TCP NULL/FIN扫描，用于绕过有状态防火墙",
+      "severity": "MEDIUM",
+      "protocol": "TCP",
+      "transport": "TCP",
+      "dst_port": 0,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "payload_length", "op": "EQ", "value": "0" }
+      ],
+      "threshold": { "count": 50, "window_ms": 10000, "group_by": "src_ip", "unique_field": "dst_port" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-057",
+      "name": "PrintNightmare-LPE-CVE-2021-1675",
+      "cve": "CVE-2021-1675",
+      "description": "PrintNightmare本地权限提升变体，通过AddPrinterDriver加载恶意驱动",
+      "severity": "CRITICAL",
+      "protocol": "DCERPC",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "dcerpc_uuid", "op": "EQ", "value": "12345678-1234-abcd-ef00-0123456789ab" },
+        { "field": "dcerpc_opnum", "op": "EQ", "value": "0x09", "comment": "AddPrinterDriver" },
+        { "field": "payload_pattern", "op": "CONTAINS", "value": ".dll" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-058",
+      "name": "RDP-Session-Hijack",
+      "cve": "N/A",
+      "description": "RDP会话劫持：利用tscon命令切换他人会话",
+      "severity": "HIGH",
+      "protocol": "RDP",
+      "transport": "TCP",
+      "dst_port": 3389,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "7473636F6E2E657865", "comment": "tscon.exe字符串" }
+      ],
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-059",
+      "name": "DNS-Rebinding",
+      "cve": "N/A",
+      "description": "DNS重绑定攻击：同一域名短时间内返回不同IP",
+      "severity": "MEDIUM",
+      "protocol": "DNS",
+      "transport": "UDP",
+      "dst_port": 53,
+      "enabled": true,
+      "match_type": "THRESHOLD",
+      "conditions": [
+        { "field": "payload_length", "op": "GT", "value": "0" }
+      ],
+      "threshold": { "count": 10, "window_ms": 5000, "group_by": "dst_ip", "unique_field": "dst_port" },
+      "action": "ALERT"
+    },
+    {
+      "id": "VDE-060",
+      "name": "CVE-2017-0143-EternalSynergy",
+      "cve": "CVE-2017-0143",
+      "description": "永恒协同 SMBv1 Transaction越界写漏洞",
+      "severity": "CRITICAL",
+      "protocol": "SMB",
+      "transport": "TCP",
+      "dst_port": 445,
+      "enabled": true,
+      "match_type": "STATELESS",
+      "conditions": [
+        { "field": "smb_version", "op": "EQ", "value": "1" },
+        { "field": "smb_command", "op": "EQ", "value": "0x25" },
+        { "field": "payload_pattern", "op": "HEX_MATCH", "value": "FF534D4225000000001007", "comment": "EternalSynergy特征" }
+      ],
+      "action": "ALERT"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+// DetectEngine.rc - DLL 版本资源文件
+
+#include <windows.h>
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_DLL
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName",      "VulnDetect Team"
+            VALUE "FileDescription",  "Vulnerability Attack Detection Engine DLL"
+            VALUE "FileVersion",      "1.0.0.0"
+            VALUE "InternalName",     "VulnDetectEngine"
+            VALUE "LegalCopyright",   "Copyright (C) 2024"
+            VALUE "OriginalFilename", "VulnDetectEngine.dll"
+            VALUE "ProductName",      "VulnDetectEngine"
+            VALUE "ProductVersion",   "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0804, 0x04b0
+    END
+END

@@ -1,0 +1,34 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.aps
+*.ncb
+*.sdf
+*.opensdf
+*.vcxproj.filters
+ipch/
+
+# Build outputs
+bin/
+obj/
+x64/
+Win32/
+Debug/
+Release/
+*.exe
+*.dll
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.obj
+*.tlog/
+
+# Logs
+logs/
+*.log
+
+# OS
+Thumbs.db
+.DS_Store
